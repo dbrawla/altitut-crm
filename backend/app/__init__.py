@@ -1,0 +1,1 @@
+"""Listmonk FastAPI backend."""

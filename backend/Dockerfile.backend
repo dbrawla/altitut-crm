@@ -1,0 +1,41 @@
+# Build from the repo root:  docker build -f backend/Dockerfile.backend .
+# (docker-compose.yml is set up to do exactly that)
+
+# --- Stage 1: build the Vue frontend -------------------------------------
+FROM node:22-alpine AS frontend
+
+WORKDIR /fe
+COPY frontend/package.json ./
+RUN npm install
+COPY frontend/ ./
+RUN npm run build
+
+# --- Stage 2: Python backend ----------------------------------------------
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN pip install uv
+
+# Install dependencies only (-r reads [project].dependencies; installing "."
+# would try to build the package before app/ is copied)
+COPY backend/pyproject.toml .
+RUN uv pip install --system -r pyproject.toml
+
+COPY backend/app/ ./app/
+
+# Original listmonk data files the port reads at runtime. schema.sql sitting
+# next to app/ makes db.ROOT resolve to /app.
+COPY schema.sql permissions.json ./
+COPY queries/ ./queries/
+COPY i18n/ ./i18n/
+COPY static/ ./static/
+
+# Built frontend, served by main.py's SPA fallback (db.ROOT / frontend/dist)
+COPY --from=frontend /fe/dist ./frontend/dist
+
+EXPOSE 9000
+
+# ponytail: single worker — sessions are DB-backed, but the OIDC state store in
+# routers/auth.py is in-process; move it to the sessions table before scaling.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
