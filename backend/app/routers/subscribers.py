@@ -152,7 +152,8 @@ async def get_subscriber(sub_id: int):
 
 @router.get("/api/subscribers/{sub_id}/export", dependencies=[auth.require("subscribers:get", "subscribers:get_all")])
 async def export_subscriber_data(sub_id: int):
-    data = await db.fetchrow("export-subscriber-data", sub_id, "")
+    # $2 is typed UUID by Postgres; "" fails at bind time, so it must be NULL.
+    data = await db.fetchval("export-subscriber-data", sub_id, None)
     if not data:
         raise not_found("subscriber not found")
     return ok(data)
@@ -166,13 +167,18 @@ async def get_subscriber_activity(sub_id: int):
 
 @router.get("/api/subscribers/{sub_id}/bounces", dependencies=[auth.require("bounces:get")])
 async def get_subscriber_bounces(sub_id: int):
-    rows = await db.fetch("get-bounces", 0, sub_id, "", 0, 1000)
+    # The query is named query-bounces and needs its %order% placeholder filled.
+    sql = db.q("query-bounces").replace("%order%", "created_at DESC")
+    rows = await db.fetch(sql, 0, 0, sub_id, "", 0, 1000)
+    for r in rows:
+        r.pop("total", None)
     return ok(rows)
 
 
 @router.delete("/api/subscribers/{sub_id}/bounces", dependencies=[auth.require("bounces:manage")])
 async def delete_subscriber_bounces(sub_id: int):
-    await db.execute("delete-bounces-by-subscriber", sub_id, "")
+    # $2 is typed UUID; pass NULL rather than "" when looking up by id.
+    await db.execute("delete-bounces-by-subscriber", sub_id, None)
     return ok(True)
 
 
@@ -325,6 +331,62 @@ async def update_subscriber(sub_id: int, payload: SubscriberPayload, user: auth.
     sub = await db.fetchrow("get-subscriber", sub_id, "", "")
     if not sub:
         raise not_found("subscriber not found")
+    await _attach_lists([sub])
+    return ok(sub)
+
+
+class SubscriberPatch(BaseModel):
+    """Every field optional — unset fields keep their current value."""
+
+    email: str | None = None
+    name: str | None = None
+    status: str | None = None
+    lists: list[int] | None = None
+    attribs: dict[str, Any] | None = None
+    preconfirm_subscriptions: bool = False
+
+
+@router.patch("/api/subscribers/{sub_id}", dependencies=[auth.require("subscribers:manage")])
+async def patch_subscriber(sub_id: int, payload: SubscriberPatch, user: auth.CurrentUser):
+    """Partial update — port of cmd/subscribers.go PatchSubscriber.
+
+    Prefills the update with the subscriber's current values so only the fields
+    actually sent are changed. `lists` being omitted (None) leaves existing
+    subscriptions alone; sending [] clears them.
+    """
+    cur = await db.fetchrow("get-subscriber", sub_id, None, "")
+    if not cur:
+        raise not_found("subscriber not found")
+
+    email = (payload.email or cur["email"]).strip().lower()
+    if "@" not in email:
+        raise bad_request("invalid email")
+    name = (payload.name if payload.name is not None else cur["name"]).strip()
+    status = payload.status or cur["status"]
+    attribs = payload.attribs if payload.attribs is not None else (cur["attribs"] or {})
+
+    permitted, all_ok = auth.permitted_list_ids(user, "manage")
+    sub_status = "confirmed" if payload.preconfirm_subscriptions else "unconfirmed"
+
+    if payload.lists is None:
+        # Keep current subscriptions: pass them through and don't prune.
+        rows = await db.fetch("get-subscriber-lists", sub_id, None, [], [], "", "")
+        lists = [r["id"] for r in rows]
+        delete_missing = False
+    else:
+        lists = _scope_lists(user, payload.lists, "manage")
+        delete_missing = True
+
+    await db.execute(
+        "update-subscriber-with-lists",
+        sub_id, email, name, status,
+        orjson.dumps(attribs).decode(),
+        lists, [], sub_status,
+        delete_missing,
+        [] if all_ok else (permitted or [-1]),
+        False,
+    )
+    sub = await db.fetchrow("get-subscriber", sub_id, None, "")
     await _attach_lists([sub])
     return ok(sub)
 

@@ -47,6 +47,35 @@ async def preview_template(tpl_id: int):
     return ok({"body": await tmpl.render_campaign_preview(camp, None)})
 
 
+class PreviewBody(BaseModel):
+    body: str = ""
+    template_type: str = "campaign"
+
+
+@router.post("/api/templates/preview", dependencies=[auth.require("templates:get")])
+async def preview_template_body(payload: PreviewBody):
+    """Preview an unsaved template body straight from the editor."""
+    if not payload.body.strip():
+        raise bad_request("empty template body")
+
+    camp = {
+        "uuid": tmpl.DUMMY_UUID,
+        "name": "Sample campaign",
+        "subject": "Sample campaign subject",
+        "from_email": "noreply@yoursite.com",
+        "body": "<p>Hello there!</p><p>This is a sample campaign body rendered into the template.</p>",
+        "content_type": "html",
+        "template_body": payload.body,
+    }
+    if payload.template_type == "tx":
+        camp["body"], camp["template_body"] = payload.body, ""
+
+    try:
+        return ok({"body": await tmpl.render_campaign_preview(camp, None)})
+    except Exception as e:
+        raise bad_request(f"error rendering template: {e}") from None
+
+
 class TemplatePayload(BaseModel):
     name: str
     type: str = "campaign"

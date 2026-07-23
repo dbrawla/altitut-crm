@@ -16,18 +16,21 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from app import db, install, manager, settings
+from app import bouncescan, buflog, db, install, manager, settings
 from app.routers import (
     admin,
+    archive,
     auth,
     bounces,
     campaigns,
     import_,
     lists,
+    maintenance,
     media,
     public,
     subscribers,
     templates,
+    tx,
     users,
 )
 
@@ -36,11 +39,14 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    buflog.install()
     pool = await db.connect()
     await install.install(pool)
     await settings.load()
     await manager.start()
+    await bouncescan.start()
     yield
+    await bouncescan.stop()
     await manager.stop()
     await db.close()
 
@@ -66,8 +72,12 @@ app.include_router(import_.router)
 app.include_router(users.router)
 app.include_router(media.router)
 app.include_router(bounces.router)
+app.include_router(maintenance.router)
+app.include_router(tx.router)
 # Public/subscriber-facing routes. Must be registered before the SPA catch-all
-# below, which would otherwise swallow /campaign/*, /link/* and /subscription/*.
+# below, which would otherwise swallow /campaign/*, /link/*, /subscription/*
+# and /archive/*.
+app.include_router(archive.router)
 app.include_router(public.router)
 
 

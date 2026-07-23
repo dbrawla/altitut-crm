@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import orjson
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from app import auth, db, settings
 from app.utils import not_found, ok
@@ -133,13 +134,62 @@ async def update_setting_by_key(key: str, value: Any):
 
 @router.post("/api/settings/smtp/test", dependencies=[auth.require("settings:manage")])
 async def test_smtp(payload: dict[str, Any]):
-    from app import messenger
+    from app import manager
 
     to = (payload.get("email") or "").strip()
     if not to:
         raise HTTPException(status_code=400, detail="missing recipient email")
-    await messenger.send_smtp_test(payload, to)
+    try:
+        await manager.send_smtp_test(payload, to)
+    except Exception as e:
+        # Surface the SMTP error to the settings UI — that is the point of the test.
+        raise HTTPException(status_code=400, detail=f"SMTP test failed: {e}") from None
     return ok(True)
+
+
+# ---------------------------------------------------------------------------
+# Logs and the live event stream
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/logs", dependencies=[auth.require("settings:get")])
+async def get_logs():
+    from app import buflog
+
+    return ok(buflog.lines())
+
+
+@router.get("/api/events", dependencies=[auth.require("settings:get")])
+async def event_stream(request: Request):
+    """SSE stream of error log lines (text/event-stream, never closes)."""
+    import asyncio
+
+    import orjson
+
+    from app import buflog
+
+    async def gen():
+        q = buflog.subscribe()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    # Keep-alive comment so proxies don't drop an idle stream.
+                    yield ": ping\n\n"
+                    continue
+                yield f"retry: 3000\ndata: {orjson.dumps(ev).decode()}\n\n"
+        finally:
+            buflog.unsubscribe(q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "Connection": "keep-alive",
+                 "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/api/admin/reload", dependencies=[auth.require("settings:manage")])

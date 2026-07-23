@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from app import db, settings, tmpl
+from app import captcha, db, settings, tmpl
 from app.utils import bad_request, not_found, ok
 
 log = logging.getLogger("listmonk")
@@ -245,14 +245,30 @@ async def public_lists() -> dict[str, Any]:
     )
 
 
+@router.get("/api/public/captcha/altcha")
+async def altcha_challenge() -> dict[str, Any]:
+    """Issue a proof-of-work challenge for the public subscription form."""
+    if captcha.provider() != "altcha":
+        raise HTTPException(status_code=404, detail="altcha is not enabled")
+    return captcha.generate_challenge()
+
+
 @router.post("/api/public/subscription")
 async def public_subscribe(
     email: str = Form(...),
     name: str = Form(default=""),
     l: list[str] = Form(default=[]),  # noqa: E741 — the original's param name
+    altcha: str = Form(default=""),
+    h_captcha_response: str = Form(default="", alias="h-captcha-response"),
 ) -> dict[str, Any]:
     if not settings.get("app.enable_public_subscription_page", True):
         raise HTTPException(status_code=404, detail="public subscription page is disabled")
+
+    # Anti-spam: only enforced when a provider is configured.
+    if captcha.is_enabled():
+        token = altcha if captcha.provider() == "altcha" else h_captcha_response
+        if not await captcha.verify(token):
+            raise bad_request("captcha verification failed")
 
     email = email.strip().lower()
     if "@" not in email or len(email) > 320:
@@ -303,8 +319,115 @@ async def public_subscribe(
 
 
 # ---------------------------------------------------------------------------
+# Public subscription form
+# ---------------------------------------------------------------------------
+
+
+@router.get("/subscription/form")
+async def subscription_form() -> HTMLResponse:
+    if not settings.get("app.enable_public_subscription_page", True):
+        raise HTTPException(status_code=404, detail="public subscription page is disabled")
+
+    sql = db.q("query-lists").replace("%order%", "name ASC")
+    rows = await db.fetch(sql, 0, "", "", "public", "", "active", [], True, [], 0, 0)
+    boxes = "".join(
+        f'<label><input type="checkbox" name="l" value="{ln["uuid"]}"> {ln["name"]}</label>'
+        for ln in rows
+    ) or "<p>There are no public lists to subscribe to.</p>"
+
+    # The altcha widget is client-side; without it the field stays empty and the
+    # POST handler rejects the submission when a provider is enabled.
+    note = ""
+    if captcha.is_enabled():
+        note = '<p><em>This form is CAPTCHA protected.</em></p>'
+
+    return _page(
+        "Subscribe",
+        f'<form method="post" action="/subscription/form">'
+        '<label>E-mail <input type="email" name="email" required style="width:100%"></label>'
+        '<label>Name <input type="text" name="name" style="width:100%"></label>'
+        f"<fieldset><legend>Lists</legend>{boxes}</fieldset>{note}"
+        '<p><button type="submit">Subscribe</button></p></form>',
+    )
+
+
+@router.post("/subscription/form")
+async def subscription_form_submit(
+    email: str = Form(...),
+    name: str = Form(default=""),
+    l: list[str] = Form(default=[]),  # noqa: E741
+    altcha: str = Form(default=""),
+    h_captcha_response: str = Form(default="", alias="h-captcha-response"),
+) -> HTMLResponse:
+    await public_subscribe(
+        email=email, name=name, l=l, altcha=altcha, h_captcha_response=h_captcha_response
+    )
+    return _page(
+        "Subscribed",
+        "<p>Subscribed. If any of the lists you selected use double opt-in, "
+        "check your inbox for a confirmation e-mail.</p>",
+    )
+
+
+# ---------------------------------------------------------------------------
+# GDPR self-service: data export and wipe
+# ---------------------------------------------------------------------------
+
+
+@router.post("/subscription/export/{sub_uuid}")
+async def export_subscriber_data(sub_uuid: str) -> Response:
+    """Download everything stored about this subscriber as JSON."""
+    if not settings.get("privacy.allow_export", True):
+        raise bad_request("data export is not allowed")
+    _check_uuids(sub_uuid)
+
+    data = await db.fetchval("export-subscriber-data", 0, sub_uuid)
+    if not data:
+        raise not_found("subscriber not found")
+
+    import orjson
+
+    return Response(
+        orjson.dumps(data, option=orjson.OPT_INDENT_2),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": "attachment; filename=data.json",
+            "X-Robots-Tag": "noindex",
+        },
+    )
+
+
+@router.post("/subscription/wipe/{sub_uuid}")
+async def wipe_subscriber_data(sub_uuid: str) -> HTMLResponse:
+    """Delete the subscriber and everything referencing them (cascade)."""
+    if not settings.get("privacy.allow_wipe", True):
+        raise bad_request("data wipe is not allowed")
+    _check_uuids(sub_uuid)
+
+    sub = await db.fetchrow("get-subscriber", 0, sub_uuid, "")
+    if not sub:
+        raise not_found("subscriber not found")
+
+    # delete-subscribers takes ($1 INT[], $2 UUID[]) — both are required.
+    await db.execute("delete-subscribers", [sub["id"]], [])
+    return _page("Deleted", "<p>Your data has been deleted.</p>")
+
+
+# ---------------------------------------------------------------------------
 # Misc public routes
 # ---------------------------------------------------------------------------
+
+
+@router.get("/", include_in_schema=False)
+async def landing() -> HTMLResponse:
+    """Root landing page — the Go build renders a `home` template here."""
+    site = settings.get("app.site_name") or "listmonk"
+    links = '<p><a href="/admin">Admin</a>'
+    if settings.get("app.enable_public_archive", True):
+        links += ' &middot; <a href="/archive">Archive</a>'
+    if settings.get("app.enable_public_subscription_page", True):
+        links += ' &middot; <a href="/subscription/form">Subscribe</a>'
+    return _page(site, links + "</p>")
 
 
 @router.get("/health")

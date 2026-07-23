@@ -7,15 +7,19 @@ import io
 import secrets
 import time
 
-from fastapi import APIRouter, Cookie, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Cookie, Form, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import auth, db, settings
+from app import auth, db, settings, tmptokens
 from app.config import env
 from app.utils import bad_request, ok
 
 router = APIRouter(tags=["auth"])
+
+# How long a password reset link stays valid.
+PASSWORD_RESET_TTL = 30 * 60
+MIN_PASSWORD_LEN = 8
 
 
 def _set_session_cookie(response: Response, sid: str) -> None:
@@ -138,6 +142,136 @@ async def update_profile(
     if payload.password:
         await auth.delete_user_sessions(user["id"], session_id or "")
     return ok(await auth.get_user(user_id=user["id"]))
+
+
+# ---------------------------------------------------------------------------
+# Password reset (/admin/forgot, /admin/reset)
+# ---------------------------------------------------------------------------
+
+
+def _auth_page(title: str, body: str) -> HTMLResponse:
+    from app.routers.public import _page
+
+    return _page(title, body)
+
+
+# Shown for every /admin/forgot POST regardless of whether the account exists,
+# so the endpoint cannot be used to enumerate registered e-mail addresses.
+_SENT_MSG = (
+    "<p>If an account with that e-mail exists, a password reset link has been sent to it.</p>"
+)
+
+
+@router.get("/admin/forgot", include_in_schema=False)
+async def forgot_page() -> HTMLResponse:
+    return _auth_page(
+        "Reset password",
+        '<form method="post">'
+        '<label>E-mail <input type="email" name="email" required style="width:100%"></label>'
+        '<p><button type="submit">Send reset link</button></p></form>'
+        '<p><a href="/admin/login">Back to login</a></p>',
+    )
+
+
+@router.post("/admin/forgot", include_in_schema=False)
+async def forgot_submit(request: Request, email: str = Form(default="")) -> HTMLResponse:
+    email = email.strip().lower()
+
+    # Every failure path below returns the same message on purpose.
+    if "@" in email and len(email) <= 320:
+        user = await auth.get_user(email=email)
+        if user and user["password_login"] and user["status"] == "enabled":
+            token = secrets.token_urlsafe(32)
+            tmptokens.set(email, PASSWORD_RESET_TTL, token)
+
+            from urllib.parse import quote
+
+            from app import notifs, tmpl
+
+            root = (settings.get("app.root_url") or "").rstrip("/")
+            reset_url = f"{root}/admin/reset?token={token}&email={quote(email)}"
+            try:
+                html = tmpl.render_system_email("forgot-password", {"ResetURL": reset_url})
+                await notifs.send_email(email, "Reset your password", html)
+            except Exception:
+                # Don't leak delivery failures back to the form.
+                import logging
+
+                logging.getLogger("listmonk").exception("failed sending password reset email")
+
+    return _auth_page("Reset password", _SENT_MSG)
+
+
+async def _valid_reset(token: str, email: str) -> dict | None:
+    """Return the user if (email, token) is a live reset request."""
+    if not token or not email:
+        return None
+    stored = tmptokens.get(email)
+    if not isinstance(stored, str) or not secrets.compare_digest(stored, token):
+        return None
+    user = await auth.get_user(email=email)
+    if not user or not user["password_login"] or user["status"] != "enabled":
+        return None
+    return user
+
+
+def _reset_form(token: str, email: str, error: str = "") -> HTMLResponse:
+    from html import escape
+
+    err = f'<div class="alert alert-error">{escape(error)}</div>' if error else ""
+    return _auth_page(
+        "Reset password",
+        f"{err}<form method=\"post\">"
+        f'<input type="hidden" name="token" value="{escape(token)}">'
+        f'<input type="hidden" name="email" value="{escape(email)}">'
+        '<label>New password <input type="password" name="password" required style="width:100%"></label>'
+        '<label>Repeat password <input type="password" name="password2" required style="width:100%"></label>'
+        '<p><button type="submit">Set password</button></p></form>',
+    )
+
+
+@router.get("/admin/reset", include_in_schema=False)
+async def reset_page(token: str = "", email: str = "") -> HTMLResponse:
+    email = email.strip().lower()
+    if not await _valid_reset(token.strip(), email):
+        return _auth_page("Reset password", "<p>This reset link is invalid or has expired.</p>")
+    return _reset_form(token.strip(), email)
+
+
+@router.post("/admin/reset", include_in_schema=False)
+async def reset_submit(
+    token: str = Form(default=""),
+    email: str = Form(default=""),
+    password: str = Form(default=""),
+    password2: str = Form(default=""),
+) -> HTMLResponse:
+    token, email = token.strip(), email.strip().lower()
+
+    user = await _valid_reset(token, email)
+    if not user:
+        return _auth_page("Reset password", "<p>This reset link is invalid or has expired.</p>")
+
+    if len(password) < MIN_PASSWORD_LEN:
+        return _reset_form(token, email, f"Password must be at least {MIN_PASSWORD_LEN} characters.")
+    if password != password2:
+        return _reset_form(token, email, "The passwords do not match.")
+
+    # Consume the token only once the new password is known-good, so a typo
+    # doesn't force the user to request a fresh link.
+    stored = tmptokens.pop(email)
+    if not isinstance(stored, str) or not secrets.compare_digest(stored, token):
+        return _auth_page("Reset password", "<p>This reset link is invalid or has expired.</p>")
+
+    await db.execute(
+        "update-user-profile", user["id"], user["name"], user["email"], True, password
+    )
+    # A password change invalidates every existing session for that user.
+    await auth.delete_user_sessions(user["id"])
+
+    return _auth_page(
+        "Password changed",
+        '<p>Your password has been updated.</p><p><a href="/admin/login">Log in</a></p>',
+    )
 
 
 # ---------------------------------------------------------------------------

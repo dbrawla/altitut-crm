@@ -10,6 +10,11 @@ from app import db, manager, settings, tmpl
 log = logging.getLogger("listmonk")
 
 
+async def send_email(to: str, subject: str, html: str) -> None:
+    """Send one system email (password reset, SMTP test, …). Raises on failure."""
+    await manager.send(to=to, subject=subject, html=html, text=tmpl.html_to_text(html))
+
+
 async def send_optin_confirmation_by_id(sub_id: int) -> bool:
     """Send the double opt-in confirmation for a subscriber's unconfirmed lists.
 

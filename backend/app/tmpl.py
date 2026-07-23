@@ -438,15 +438,36 @@ async def render_campaign_preview(camp: dict[str, Any], sub: dict[str, Any] | No
     return html_body
 
 
+def render_tx(
+    body: str, subject: str, sub: dict[str, Any] | None, data: dict[str, Any]
+) -> tuple[str, str]:
+    """Render a transactional template — port of models.TxMessage.Render.
+
+    The context is {Subscriber, Tx}, where `.Tx.Data.<key>` exposes the caller's
+    arbitrary params. Returns (subject, body).
+    """
+    ctx: dict[str, Any] = {
+        "DOT": {},
+        "Subscriber": subscriber_ctx(sub),
+        "Tx": {"Data": data or {}, "Subject": subject},
+    }
+    ctx["DOT"] = ctx
+    rendered_subject = _render_str(subject or "", ctx)
+    ctx["Tx"]["Subject"] = rendered_subject
+    return rendered_subject, _render_str(body or "", ctx)
+
+
 def render_system_email(name: str, data: dict[str, Any]) -> str:
     """Render static/email-templates/<name>.html (Go syntax) with `data`."""
     src = (db.ROOT / "static" / "email-templates" / f"{name}.html").read_text(encoding="utf-8")
     parts = split_defines(src)
     body = parts.get(name) or parts.get("") or src
+    # Values, not lambdas — Jinja renders a bare `{{ LogoURL }}` as the object
+    # itself, which put "<function ... at 0x...>" into the <img src>.
     ctx: dict[str, Any] = {
         "DOT": data,
-        "RootURL": lambda: (settings.get("app.root_url") or "").rstrip("/"),
-        "LogoURL": lambda: settings.get("app.logo_url") or "",
+        "RootURL": (settings.get("app.root_url") or "").rstrip("/"),
+        "LogoURL": settings.get("app.logo_url") or "",
         "SiteName": settings.get("app.site_name", "listmonk"),
     }
     ctx.update(data)

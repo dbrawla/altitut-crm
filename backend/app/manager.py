@@ -15,6 +15,7 @@ The SQL is the original listmonk queries, so the checkpointing semantics
 from __future__ import annotations
 
 import asyncio
+import email.policy
 import logging
 import time
 from email.message import EmailMessage
@@ -26,6 +27,12 @@ import aiosmtplib
 from app import db, settings, tmpl
 
 log = logging.getLogger("listmonk")
+
+# RFC 5322 allows 998-char lines. The default 78-char limit makes Python fall
+# back to RFC 2047 encoded-words for long unfoldable values (a URL has no
+# spaces to fold at), which mangles List-Unsubscribe into something no mail
+# client can parse. Non-ASCII subjects are still encoded correctly.
+_POLICY = email.policy.SMTP.clone(max_line_length=998)
 
 # campaign_id -> messages sent in the last 60s (read by /api/campaigns/running/stats).
 send_rates: dict[int, int] = {}
@@ -68,8 +75,9 @@ def _build(
     text: str,
     from_email: str,
     headers: list[dict[str, str]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> EmailMessage:
-    msg = EmailMessage()
+    msg = EmailMessage(policy=_POLICY)
     name, addr = parseaddr(from_email)
     msg["From"] = formataddr((name, addr)) if name else addr
     msg["To"] = to
@@ -86,6 +94,16 @@ def _build(
     msg.set_content(text or "")
     if html:
         msg.add_alternative(html, subtype="html")
+
+    for att in attachments or []:
+        ctype = att.get("content_type") or "application/octet-stream"
+        maintype, _, subtype = ctype.partition("/")
+        msg.add_attachment(
+            att["content"],
+            maintype=maintype or "application",
+            subtype=subtype or "octet-stream",
+            filename=att.get("name") or "attachment",
+        )
     return msg
 
 
@@ -111,6 +129,7 @@ async def send(
     from_email: str = "",
     messenger: str = "email",
     headers: list[dict[str, str]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     """Deliver one message. Raises on failure so callers can count errors."""
     block = _smtp_block(messenger)
@@ -118,10 +137,14 @@ async def send(
         raise RuntimeError("no enabled SMTP block configured")
 
     from_email = from_email or settings.get("app.from_email") or ""
-    msg = _build(to, subject, html, text, from_email, headers)
+    msg = _build(to, subject, html, text, from_email, headers, attachments)
 
     await _throttle()
+    await _deliver(msg, block)
 
+
+async def _deliver(msg: EmailMessage, block: dict[str, Any]) -> None:
+    """Hand one built message to an SMTP server described by `block`."""
     tls = (block.get("tls_type") or "none").upper()
     kwargs: dict[str, Any] = {
         "hostname": block.get("host"),
@@ -137,15 +160,74 @@ async def send(
         kwargs["username"] = block["username"]
         kwargs["password"] = block.get("password") or ""
 
+    # aiosmtplib.flatten_message() hardcodes email.policy.SMTP (78-char lines)
+    # and ignores msg.policy, which would re-encode List-Unsubscribe as an
+    # RFC 2047 encoded-word. Serialise here with _POLICY and hand over bytes,
+    # which bypasses its flattening entirely.
+    raw = msg.as_bytes()
+    sender = parseaddr(msg["From"])[1]
+    recipients = [parseaddr(a)[1] for a in (msg.get_all("To") or [])]
+
     retries = int(block.get("max_msg_retries") or 2)
     for attempt in range(retries + 1):
         try:
-            await aiosmtplib.send(msg, **kwargs)
+            await aiosmtplib.send(raw, sender=sender, recipients=recipients, **kwargs)
             return
         except Exception:
             if attempt == retries:
                 raise
             await asyncio.sleep(0.5 * (attempt + 1))
+
+
+async def send_smtp_test(block: dict[str, Any], to: str) -> None:
+    """Send a test email through an SMTP block straight from the settings form.
+
+    The block is the one being edited in the UI, which may not be saved yet, so
+    it is used directly instead of going through _smtp_block().
+    """
+    from app import tmpl as _tmpl
+
+    html = _tmpl.render_system_email(
+        "smtp-test", {"Settings": block, "Email": to}
+    )
+    msg = _build(
+        to=to,
+        subject=f"{settings.get('app.site_name') or 'listmonk'} SMTP test",
+        html=html,
+        text=_tmpl.html_to_text(html),
+        from_email=(block.get("from_addresses") or [None])[0]
+        or settings.get("app.from_email")
+        or "",
+    )
+    await _deliver(msg, block)
+
+
+def campaign_headers(camp: dict[str, Any], sub: dict[str, Any]) -> list[dict[str, str]]:
+    """Per-message headers for a campaign send.
+
+    X-Listmonk-Campaign/-Subscriber are what the bounce mailbox scanner reads to
+    attribute a bounce back to a campaign and subscriber, so they must be on
+    every outgoing campaign message.
+    """
+    hdrs: list[dict[str, str]] = list(camp.get("headers") or [])
+    hdrs.append(
+        {
+            "X-Listmonk-Campaign": str(camp.get("uuid") or ""),
+            "X-Listmonk-Subscriber": str(sub.get("uuid") or ""),
+        }
+    )
+
+    # One-click unsubscribe (RFC 8058) — required by bulk senders like Gmail.
+    if settings.get("privacy.unsubscribe_header", False):
+        root = (settings.get("app.root_url") or "").rstrip("/")
+        unsub = f"{root}/subscription/{camp.get('uuid')}/{sub.get('uuid')}"
+        hdrs.append(
+            {
+                "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+                "List-Unsubscribe": f"<{unsub}>",
+            }
+        )
+    return hdrs
 
 
 async def send_test_message(camp: dict[str, Any], sub: dict[str, Any]) -> None:
@@ -158,7 +240,7 @@ async def send_test_message(camp: dict[str, Any], sub: dict[str, Any]) -> None:
         text=text,
         from_email=camp.get("from_email") or "",
         messenger=camp.get("messenger") or "email",
-        headers=camp.get("headers") or [],
+        headers=campaign_headers(camp, sub),
     )
 
 
@@ -238,7 +320,7 @@ async def _run_campaign(camp: dict[str, Any]) -> None:
                             text=text,
                             from_email=camp.get("from_email") or "",
                             messenger=camp.get("messenger") or "email",
-                            headers=camp.get("headers") or [],
+                            headers=campaign_headers(camp, sub),
                         )
                         _mark_sent(camp_id)
                         return True
