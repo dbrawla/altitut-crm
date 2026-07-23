@@ -14,7 +14,7 @@ const app = createApp(App)
 app.use(createPinia())
 app.use(router)
 // Oruga (Vue 3 successor to Buefy) with the Bulma theme — restores the original
-// listmonk look and its dropdowns/tables/selects. theme.css bundles full Bulma.
+// Altitut look and its dropdowns/tables/selects. theme.css bundles full Bulma.
 app.use(Oruga, bulmaConfig)
 
 app.mount('#app')

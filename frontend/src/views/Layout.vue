@@ -3,7 +3,7 @@
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-logo">
-        <span>✉</span> listmonk
+        <img src="../assets/logo.svg" alt="Altitut" style="height: 32px;" />
       </div>
       <nav class="sidebar-nav">
         <div class="sidebar-section">Main</div>

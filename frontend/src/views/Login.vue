@@ -1,7 +1,7 @@
 <template>
   <div class="login-page">
     <div class="login-card">
-      <div class="login-logo">✉ listmonk</div>
+      <div class="login-logo"><img src="../assets/logo.svg" alt="Altitut" style="height: 48px;" /></div>
       <h1 class="login-title">Sign in</h1>
       <div class="alert alert-error" v-if="error">{{ error }}</div>
       <form @submit.prevent="handleLogin">
@@ -51,7 +51,7 @@ async function handleLogin() {
 <style scoped>
 .login-page {
   min-height: 100vh;
-  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 60%, #4c1d95 100%);
+  background: linear-gradient(135deg, #003D47 0%, #005A6A 60%, #007A8D 100%);
   display: flex;
   align-items: center;
   justify-content: center;

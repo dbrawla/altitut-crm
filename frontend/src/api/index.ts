@@ -1,5 +1,5 @@
 /**
- * Typed Axios API client for the listmonk FastAPI backend.
+ * Typed Axios API client for the Altitut FastAPI backend.
  * Replaces the untyped Axios calls scattered across the Vue 2 codebase.
  */
 
