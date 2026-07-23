@@ -16,8 +16,20 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from app import db, install, settings
-from app.routers import admin, auth, campaigns, import_, lists, subscribers, templates
+from app import db, install, manager, settings
+from app.routers import (
+    admin,
+    auth,
+    bounces,
+    campaigns,
+    import_,
+    lists,
+    media,
+    public,
+    subscribers,
+    templates,
+    users,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,7 +39,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     pool = await db.connect()
     await install.install(pool)
     await settings.load()
+    await manager.start()
     yield
+    await manager.stop()
     await db.close()
 
 
@@ -49,6 +63,12 @@ app.include_router(lists.router)
 app.include_router(campaigns.router)
 app.include_router(templates.router)
 app.include_router(import_.router)
+app.include_router(users.router)
+app.include_router(media.router)
+app.include_router(bounces.router)
+# Public/subscriber-facing routes. Must be registered before the SPA catch-all
+# below, which would otherwise swallow /campaign/*, /link/* and /subscription/*.
+app.include_router(public.router)
 
 
 # Media uploads. The directory is a runtime setting (editable in the UI), so

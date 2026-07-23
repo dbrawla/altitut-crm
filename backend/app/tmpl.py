@@ -369,19 +369,26 @@ async def render_message(
         "DOT": {},
         "Subscriber": subscriber_ctx(sub),
         "Campaign": campaign_ctx(camp),
+        # Go's template engine auto-calls niladic functions, Jinja does not:
+        # `{{ UnsubscribeURL }}` would render the function object itself. These
+        # take no arguments in Go, so they're passed as plain values. TrackLink
+        # takes a URL argument and stays callable.
         "TrackLink": TrackLink,
-        "TrackView": TrackView,
-        "UnsubscribeURL": lambda: unsub_url,
-        "ManageURL": lambda: unsub_url + "?manage=true",
-        "OptinURL": lambda: urls["optin"].format(sub_uuid=sub_uuid),
-        "MessageURL": lambda: urls["message"].format(camp_uuid=camp_uuid, sub_uuid=sub_uuid),
-        "ArchiveURL": lambda: urls["archive"],
-        "RootURL": lambda: urls["root"],
+        "TrackView": TrackView(),
+        "UnsubscribeURL": unsub_url,
+        "ManageURL": unsub_url + "?manage=true",
+        "OptinURL": urls["optin"].format(sub_uuid=sub_uuid),
+        "MessageURL": urls["message"].format(camp_uuid=camp_uuid, sub_uuid=sub_uuid),
+        "ArchiveURL": urls["archive"],
+        "RootURL": urls["root"],
     }
     ctx["DOT"] = ctx
 
-    # 1) Subject.
+    # 1) Subject. Feed the rendered value back into the context so that
+    # `{{ .Campaign.Subject }}` in the body/template (the default template puts
+    # it in <title>) shows the rendered subject, not the raw placeholders.
     subject = _render_str(camp.get("subject") or "", ctx)
+    ctx["Campaign"]["Subject"] = subject
 
     # 2) Content (campaign body).
     body_src = camp.get("body") or ""
