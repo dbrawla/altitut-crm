@@ -17,13 +17,13 @@
       </div>
       <div class="column is-3">
         <div class="box has-text-centered">
-          <p class="title is-2 has-text-warning">{{ counts?.lists?.total ?? 0 }}</p>
+          <p class="title is-2">{{ counts?.lists?.total ?? 0 }}</p>
           <p class="subtitle is-6 has-text-grey">Lists</p>
         </div>
       </div>
       <div class="column is-3">
         <div class="box has-text-centered">
-          <p class="title is-2 has-text-link">{{ counts?.campaigns?.total ?? 0 }}</p>
+          <p class="title is-2 has-text-primary">{{ counts?.campaigns?.total ?? 0 }}</p>
           <p class="subtitle is-6 has-text-grey">Campaigns</p>
         </div>
       </div>

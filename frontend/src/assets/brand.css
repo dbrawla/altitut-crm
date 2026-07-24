@@ -1,0 +1,117 @@
+/* Hallmark · redesign: CRM admin · tone: utilitarian · anchor hue: teal 189°
+ * Retints Bulma 1.0 to the Altitut brand tokens (main.css) and adds restrained
+ * craft polish. Loaded LAST so its :root vars win over Bulma's defaults, and so
+ * component tuning overrides the framework without touching view markup.
+ * Brand colours + logo preserved; only the framework's default palette changes. */
+
+:root {
+  /* Light-lock. Bulma 1.0 auto-flips to dark under @media (prefers-color-scheme:
+     dark) on a plain :root, which collided with the brand's light shell (dark
+     boxes + invisible titles). brand.css loads after Bulma, so re-asserting the
+     light lightness values here wins over the dark media query on every OS. */
+  --bulma-scheme-main-l: 100%;
+  --bulma-scheme-main-bis-l: 98%;
+  --bulma-scheme-main-ter-l: 96%;
+  --bulma-background-l: 96%;
+  --bulma-border-l: 86%;
+  --bulma-border-weak-l: 93%;
+  --bulma-text-l: 29%;
+  --bulma-text-strong-l: 21%;
+  --bulma-text-weak-l: 48%;
+  --bulma-scheme-invert-l: 4%;
+  --bulma-scheme-invert-bis-l: 7%;
+  --bulma-scheme-invert-ter-l: 14%;
+
+  /* Retint Bulma's primary + link to the Altitut teal (#005A6A ≈ hsl(189,100%,21%)).
+     Bulma derives every primary/link shade from these three, so the turquoise
+     default is replaced framework-wide — buttons, tags, active states, focus. */
+  --bulma-primary-h: 189deg;
+  --bulma-primary-s: 100%;
+  --bulma-primary-l: 21%;
+  --bulma-link-h: 189deg;
+  --bulma-link-s: 100%;
+  --bulma-link-l: 21%;
+
+  /* Match Bulma's chrome to the token system in main.css. */
+  --bulma-body-background-color: var(--color-bg);
+  --bulma-radius: var(--radius);
+  --bulma-radius-small: 6px;
+  --bulma-family-primary: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Bulma resets body font/bg after main.css loads — re-assert the brand ones. */
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--color-bg);
+}
+
+/* Links inside the content area stay brand teal; button-links must not inherit
+   the global a:hover underline from main.css. */
+.main-content a:not(.button):not(.tag) {
+  color: var(--color-primary);
+}
+.button:hover,
+.button:focus {
+  text-decoration: none;
+}
+
+/* Panels: trade Bulma's heavy default shadow for the token border + soft shadow,
+   so the content reads as one calm system rather than floating toy cards. */
+.box {
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow);
+  border-radius: var(--radius);
+}
+
+/* Table headers: quiet, uppercase micro-caps — matches the sidebar section labels
+   and stops the header row competing with the data. */
+.table th {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+.table td,
+.table th {
+  vertical-align: middle;
+}
+
+/* Accessibility: a visible focus ring at >=3:1, shown instantly (never animated). */
+.button:focus-visible,
+.input:focus-visible,
+.select select:focus-visible,
+.textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Page section: tighten Bulma's 3rem top gap so the toolbar sits closer to the
+   top bar without feeling cramped. */
+.main-content > .section {
+  padding: 1.75rem 1.75rem 2.5rem;
+}
+
+/* Oruga's checkbox (.checkbox.control) is inline-flex but collapses to the 16px
+   check size, so a long .control-label overflows to the right, wraps into a narrow
+   column, and overlaps the next field. Each checkbox sits in its own block .field,
+   so promote it to a full-width flex row: check left, label takes the rest. */
+.field .checkbox.control {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.field .checkbox.control .control-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  line-height: 1.3;
+}
+
+/* The .level toolbar every view uses for "title left / actions right": keep it
+   from collapsing its right-side buttons together. */
+.level .level-right .button + .button,
+.level .level-right .o-btn + .o-btn {
+  margin-left: 0.5rem;
+}
