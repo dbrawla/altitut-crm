@@ -1,47 +1,106 @@
-<a href="https://zerodha.tech"><img src="https://zerodha.tech/static/images/github-badge.svg" align="right" /></a>
+# Altitut CRM
 
-[![listmonk-logo](https://user-images.githubusercontent.com/547147/231084896-835dba66-2dfe-497c-ba0f-787564c0819e.png)](https://listmonk.app)
+A self-hosted newsletter, mailing-list, and subscriber CRM for Altitut. It began as a
+fork of [listmonk](https://listmonk.app) and has since been re-platformed: the Go backend
+was ported to **Python / FastAPI**, the frontend was rebuilt in **Vue 3**, and the whole
+admin UI was rebranded and redesigned to the Altitut identity.
 
-listmonk is a standalone, self-hosted, newsletter and mailing list manager. It is fast, feature-rich, and packed into a single binary. It uses a PostgreSQL database as its data store.
+> The original Go source (`cmd/`, `internal/`, `models/`, `*.go`) is kept in the tree for
+> reference but is **not** the app that runs. The live app is `backend/` + `frontend/`.
 
-[![listmonk-dashboard](https://github.com/user-attachments/assets/689b5fbb-dd25-4956-a36f-e3226a65f9c4)](https://listmonk.app)
+---
 
-Visit [listmonk.app](https://listmonk.app) for more info. Check out the [**live demo**](https://demo.listmonk.app).
+## Stack
 
-## Installation
+| Layer      | Tech |
+| ---------- | ---- |
+| Backend    | Python 3.12, FastAPI, SQLAlchemy 2 (async) + asyncpg, Alembic, Pydantic v2, arq (background jobs), aiosmtplib |
+| Frontend   | Vue 3 (`<script setup>`), TypeScript, Vite, Pinia, vue-router 4, Oruga UI 0.13 + `@oruga-ui/theme-bulma` 0.9 on Bulma 1.0, Chart.js, CodeMirror 6, TinyMCE |
+| Database   | PostgreSQL 17 |
+| Packaging  | Docker Compose (backend image also builds & serves the compiled frontend) |
 
-### Docker
+Brand: Altitut teal `#005A6A` (`hsl(189,100%,21%)`), Inter typeface, logo at
+`frontend/src/assets/logo.svg`.
 
-The latest image is available on DockerHub at [`listmonk/listmonk:latest`](https://hub.docker.com/r/listmonk/listmonk/tags?page=1&ordering=last_updated&name=latest).
-Download and use the sample [docker-compose.yml](https://github.com/knadh/listmonk/blob/master/docker-compose.yml).
+---
 
+## Run it locally (Docker — recommended)
 
-```shell
-# Download the compose file to the current directory.
-curl -LO https://github.com/knadh/listmonk/raw/master/docker-compose.yml
+The backend image builds the Vue frontend and serves it, so one command brings up the
+whole app plus Postgres.
 
-# Run the services in the background.
-docker compose up -d
+```bash
+docker compose up -d --build      # build + start backend and db
+# open http://localhost:9000/admin
 ```
-Visit `http://localhost:9000`
 
-See [installation docs](https://listmonk.app/docs/installation)
+Default admin credentials are seeded on first start: **`listmonk` / `listmonk`**
+(override with `LISTMONK_ADMIN_USER` / `LISTMONK_ADMIN_PASSWORD`). Change them for anything
+that isn't local.
 
-__________________
+```bash
+docker compose logs -f backend    # tail logs
+docker compose down               # stop (keeps the db volume)
+docker compose down -v            # stop and wipe the db
+```
 
-### Binary
-- Download the [latest release](https://github.com/knadh/listmonk/releases) and extract the listmonk binary.
-- `./listmonk --new-config` to generate config.toml. Edit it.
-- `./listmonk --install` to setup the Postgres DB (or `--upgrade` to upgrade an existing DB. Upgrades are idempotent and running them multiple times have no side effects).
-- Run `./listmonk` and visit `http://localhost:9000`
+After editing frontend or backend code, rebuild: `docker compose up -d --build`.
 
-See [installation docs](https://listmonk.app/docs/installation)
-__________________
+## Run it locally (without Docker)
 
+You need Python 3.12+, Node 18+, and a running Postgres 17.
 
-## Developers
-listmonk is free and open source software licensed under AGPLv3. If you are interested in contributing, refer to the [developer setup](https://listmonk.app/docs/developer-setup). The backend is written in Go and the frontend is Vue with Buefy for UI. 
+```bash
+# Backend
+cd backend
+pip install -e ".[dev]"
+# point it at your DB via env vars (see backend/app/config.py): DB_HOST, DB_PORT,
+# DB_USER, DB_PASSWORD, DB_NAME, ADMIN_USERNAME, ADMIN_PASSWORD
+uvicorn app.main:app --host 0.0.0.0 --port 9000 --reload
 
+# Frontend (separate terminal) — Vite dev server with hot reload
+cd frontend
+npm install
+npm run dev
+```
+
+---
+
+## Project layout
+
+```
+backend/
+  app/
+    main.py            FastAPI app + startup (seeds admin, mounts frontend dist)
+    config.py          Pydantic Settings — all env vars live here
+    db.py auth.py ...   core modules (manager, importer, bouncescan, captcha, notifs…)
+    routers/           one file per API area: subscribers, lists, campaigns, templates,
+                       media, users, bounces, tx, import_, maintenance, archive,
+                       public, admin, auth
+  Dockerfile.backend   multi-stage: builds frontend, then the Python image
+  pyproject.toml       deps + ruff/mypy config
+frontend/
+  src/views/           one Vue view per admin page (Dashboard, Subscribers, Campaigns,
+                       CampaignEditor, Lists, Templates, Media, Users, Roles, Bounces,
+                       Import, Logs, Maintenance, Settings, Profile, Layout, Login)
+  src/assets/
+    main.css           custom shell design system (.sidebar-*, tokens)
+    brand.css          Altitut retint of Bulma + UI polish (loaded LAST)
+  src/main.ts          app bootstrap — Pinia, router, Oruga (see comments; load order matters)
+docker-compose.yml     backend + db services
+```
+
+---
+
+## Tooling for contributors (Claude Code)
+
+This project is built with the help of **Claude Code**. Some Claude Code skills/plugins were
+used to build and maintain the app — teammates should install them so everyone works with the
+same tooling. See **[CLAUDE.md](CLAUDE.md)** for the full architecture guide and the exact
+install commands.
+
+---
 
 ## License
-listmonk is licensed under the AGPL v3 license.
+
+Inherited from listmonk: **AGPL v3** (see `LICENSE`).
