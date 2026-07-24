@@ -6,8 +6,7 @@ export interface PageResults<T> {
   total: number
   page: number
   per_page: number
-  search: string
-  query?: string
+  query: string
 }
 
 export interface OkResponse<T = unknown> {
@@ -184,7 +183,8 @@ export interface CampaignCreate {
   subject?: string
   from_email?: string
   body?: string
-  altbody?: string
+  // Explicit null clears the field server-side; undefined leaves it alone.
+  altbody?: string | null
   content_type?: ContentType
   send_at?: string | null
   tags?: string[]
@@ -214,10 +214,12 @@ export interface Media {
   uuid: string
   filename: string
   thumb: string
-  name: string
   content_type: string
   meta: Record<string, unknown>
   provider: string
+  /** Server-built public URLs for the original and the thumbnail. */
+  url: string
+  thumb_url: string
   created_at: string | null
 }
 
@@ -227,65 +229,75 @@ export interface Media {
 
 export type UserType = 'user' | 'api'
 export type UserStatus = 'enabled' | 'disabled'
+export type TwoFAType = 'none' | 'totp'
 
+// Field names mirror the API response exactly (see backend/app/auth.py
+// _shape_user): user_role_id / list_role_id / password_login / twofa_type.
 export interface User {
   id: number
-  uuid: string
   username: string
   name: string
   email: string
   type: UserType
   status: UserStatus
-  role_id: number | null
+  avatar: string | null
+  password_login: boolean
+  twofa_type: TwoFAType
+  user_role_id: number | null
+  list_role_id: number | null
+  user_role?: UserRole | null
+  list_role?: ListRole | null
   loggedin_at: string | null
-  twofa_totp_enabled: boolean
-  password_login_enabled: boolean
   created_at: string | null
   updated_at: string | null
+  /** Only returned once, when an `api` type user is created. */
+  password?: string
 }
 
 export interface UserCreate {
   username: string
-  name: string
-  email: string
+  name?: string
+  email?: string
   type?: UserType
   status?: UserStatus
-  role_id?: number | null
-  password?: string
-  password_login_enabled?: boolean
+  user_role_id?: number
+  list_role_id?: number | null
+  password?: string | null
+  password_login?: boolean
 }
 
-export interface UserUpdate extends Partial<UserCreate> {}
+export interface UserUpdate extends UserCreate {}
 
 // -------------------------------------------------------------------------
 // Role
 // -------------------------------------------------------------------------
 
+/** Per-list permissions attached to a list role. */
+export interface ListPermission {
+  id: number
+  name?: string
+  permissions: string[]
+}
+
 export interface UserRole {
   id: number
   name: string
+  type?: string
   permissions: string[]
+  list_permissions?: ListPermission[]
   created_at: string | null
   updated_at: string | null
 }
 
-export interface ListRole {
-  id: number
-  name: string
-  permissions: string[]
-  created_at: string | null
-  updated_at: string | null
-}
+export interface ListRole extends UserRole {}
 
 export interface RoleCreate {
   name: string
   permissions?: string[]
+  lists?: ListPermission[]
 }
 
-export interface RoleUpdate {
-  name?: string
-  permissions?: string[]
-}
+export interface RoleUpdate extends RoleCreate {}
 
 // -------------------------------------------------------------------------
 // Bounce
@@ -293,13 +305,18 @@ export interface RoleUpdate {
 
 export type BounceType = 'soft' | 'hard' | 'complaint'
 
+// Shape comes from the query-bounces SQL, which joins in the subscriber
+// and campaign rather than returning bare foreign keys.
 export interface Bounce {
   id: number
   type: BounceType
   source: string
   meta: Record<string, unknown>
-  campaign_id: number | null
   subscriber_id: number
+  subscriber_uuid: string
+  email: string
+  subscriber_status: SubscriberStatus
+  campaign: { id: number; name: string } | null
   created_at: string | null
 }
 
@@ -339,4 +356,54 @@ export interface SMTPConfig {
   from_addresses: string[]
 }
 
-export type Settings = Record<string, unknown>
+export type Settings = Record<string, any>
+
+// -------------------------------------------------------------------------
+// Server config, import, analytics
+// -------------------------------------------------------------------------
+
+export interface ServerConfig {
+  version?: string
+  root_url?: string
+  from_email?: string
+  messengers?: string[]
+  langs?: { code: string; name: string }[]
+  lang?: string
+  permissions?: string[]
+  [k: string]: unknown
+}
+
+export interface AboutInfo {
+  version: string
+  build?: string
+  go?: string
+  python?: string
+  database?: Record<string, unknown>
+  [k: string]: unknown
+}
+
+export type ImportMode = 'subscribe' | 'blocklist'
+
+export interface ImportStatus {
+  name: string
+  total: number
+  imported: number
+  status: 'none' | 'importing' | 'stopping' | 'stopped' | 'finished' | 'failed'
+  log?: string
+}
+
+export interface CampaignAnalytics {
+  campaign_id: number
+  count: number
+  date?: string
+  url?: string
+}
+
+export interface SubscriberActivity {
+  views: { campaign: string; views: number }[]
+  clicks: { campaign: string; clicks: number }[]
+}
+
+export interface CountResult {
+  count: number
+}

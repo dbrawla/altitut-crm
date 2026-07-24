@@ -6,18 +6,18 @@
     </div>
 
     <o-table :data="rows" :loading="loading">
-      <o-table-column v-slot="props" field="name" label="Name">{{ props.row.name }}</o-table-column>
-      <o-table-column v-slot="props" field="type" label="Type"><o-tag variant="info">{{ props.row.type }}</o-tag></o-table-column>
+      <o-table-column v-slot="props" field="name" label="Name">{{ props?.row.name }}</o-table-column>
+      <o-table-column v-slot="props" field="type" label="Type"><o-tag variant="info">{{ props?.row.type }}</o-tag></o-table-column>
       <o-table-column v-slot="props" label="Default">
-        <o-tag v-if="props.row.is_default" variant="success">Default</o-tag>
+        <o-tag v-if="props?.row.is_default" variant="success">Default</o-tag>
       </o-table-column>
-      <o-table-column v-slot="props" field="created_at" label="Created">{{ formatDate(props.row.created_at) }}</o-table-column>
+      <o-table-column v-slot="props" field="created_at" label="Created">{{ formatDate(props?.row.created_at) }}</o-table-column>
       <o-table-column v-slot="props" label="Actions" width="80">
         <o-dropdown aria-role="list" position="bottom-left">
           <template #trigger><o-button size="small" label="⋯" /></template>
-          <o-dropdown-item aria-role="listitem" @click="edit(props.row)">Edit</o-dropdown-item>
-          <o-dropdown-item v-if="!props.row.is_default" aria-role="listitem" @click="setDefault(props.row.id)">Set default</o-dropdown-item>
-          <o-dropdown-item v-if="!props.row.is_default" aria-role="listitem" @click="del(props.row.id)">Delete</o-dropdown-item>
+          <o-dropdown-item aria-role="listitem" @click="edit(props?.row)">Edit</o-dropdown-item>
+          <o-dropdown-item v-if="!props?.row.is_default" aria-role="listitem" @click="setDefault(props?.row.id)">Set default</o-dropdown-item>
+          <o-dropdown-item v-if="!props?.row.is_default" aria-role="listitem" @click="del(props?.row.id)">Delete</o-dropdown-item>
         </o-dropdown>
       </o-table-column>
       <template #empty><div class="has-text-centered has-text-grey p-5">No templates yet</div></template>

@@ -7,23 +7,23 @@
 
     <o-table :data="rows" :loading="loading">
       <o-table-column v-slot="props" field="name" label="Name">
-        <strong>{{ props.row.name }}</strong>
-        <div class="has-text-grey is-size-7">{{ props.row.description }}</div>
+        <strong>{{ props?.row.name }}</strong>
+        <div class="has-text-grey is-size-7">{{ props?.row.description }}</div>
       </o-table-column>
       <o-table-column v-slot="props" field="type" label="Type">
-        <o-tag variant="info">{{ props.row.type }}</o-tag>
+        <o-tag variant="info">{{ props?.row.type }}</o-tag>
       </o-table-column>
-      <o-table-column v-slot="props" field="optin" label="Opt-in">{{ props.row.optin }}</o-table-column>
+      <o-table-column v-slot="props" field="optin" label="Opt-in">{{ props?.row.optin }}</o-table-column>
       <o-table-column v-slot="props" field="status" label="Status">
-        <o-tag :variant="props.row.status === 'active' ? 'success' : 'light'">{{ props.row.status }}</o-tag>
+        <o-tag :variant="props?.row.status === 'active' ? 'success' : 'light'">{{ props?.row.status }}</o-tag>
       </o-table-column>
-      <o-table-column v-slot="props" label="Subscribers">{{ props.row.subscriber_count }}</o-table-column>
-      <o-table-column v-slot="props" field="created_at" label="Created">{{ formatDate(props.row.created_at) }}</o-table-column>
+      <o-table-column v-slot="props" label="Subscribers">{{ props?.row.subscriber_count }}</o-table-column>
+      <o-table-column v-slot="props" field="created_at" label="Created">{{ formatDate(props?.row.created_at) }}</o-table-column>
       <o-table-column v-slot="props" label="Actions" width="80">
         <o-dropdown aria-role="list" position="bottom-left">
           <template #trigger><o-button size="small" label="⋯" /></template>
-          <o-dropdown-item aria-role="listitem" @click="editList(props.row)">Edit</o-dropdown-item>
-          <o-dropdown-item aria-role="listitem" @click="deleteList(props.row.id)">Delete</o-dropdown-item>
+          <o-dropdown-item aria-role="listitem" @click="editList(props?.row)">Edit</o-dropdown-item>
+          <o-dropdown-item aria-role="listitem" @click="deleteList(props?.row.id)">Delete</o-dropdown-item>
         </o-dropdown>
       </o-table-column>
       <template #empty><div class="has-text-centered has-text-grey p-5">No lists yet</div></template>

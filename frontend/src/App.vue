@@ -3,12 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
-import { useAppStore } from '@/store/app'
-
-const appStore = useAppStore()
-
-onMounted(async () => {
-  await appStore.fetchProfile()
-})
+// The profile is resolved by the router guard (see router/index.ts) before any
+// authenticated route renders, so there's no fetch here — doing both raced and
+// fired a pointless 401 on the login page.
 </script>

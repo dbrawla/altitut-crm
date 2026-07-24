@@ -30,20 +30,20 @@
       :current-page="page"
       @page-change="changePage"
     >
-      <o-table-column v-slot="props" field="email" label="Email">{{ props.row.email }}</o-table-column>
-      <o-table-column v-slot="props" field="name" label="Name">{{ props.row.name }}</o-table-column>
+      <o-table-column v-slot="props" field="email" label="Email">{{ props?.row.email }}</o-table-column>
+      <o-table-column v-slot="props" field="name" label="Name">{{ props?.row.name }}</o-table-column>
       <o-table-column v-slot="props" field="status" label="Status">
-        <o-tag :variant="statusVariant(props.row.status)">{{ props.row.status }}</o-tag>
+        <o-tag :variant="statusVariant(props?.row.status)">{{ props?.row.status }}</o-tag>
       </o-table-column>
-      <o-table-column v-slot="props" label="Lists">{{ props.row.lists.length }}</o-table-column>
-      <o-table-column v-slot="props" field="created_at" label="Created">{{ formatDate(props.row.created_at) }}</o-table-column>
+      <o-table-column v-slot="props" label="Lists">{{ props?.row.lists.length }}</o-table-column>
+      <o-table-column v-slot="props" field="created_at" label="Created">{{ formatDate(props?.row.created_at) }}</o-table-column>
       <o-table-column v-slot="props" label="Actions" width="80">
         <o-dropdown aria-role="list" position="bottom-left">
           <template #trigger>
             <o-button size="small" label="⋯" />
           </template>
-          <o-dropdown-item aria-role="listitem" @click="editSub(props.row)">Edit</o-dropdown-item>
-          <o-dropdown-item aria-role="listitem" @click="deleteSub(props.row.id)">Delete</o-dropdown-item>
+          <o-dropdown-item aria-role="listitem" @click="editSub(props?.row)">Edit</o-dropdown-item>
+          <o-dropdown-item aria-role="listitem" @click="deleteSub(props?.row.id)">Delete</o-dropdown-item>
         </o-dropdown>
       </o-table-column>
 

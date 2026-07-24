@@ -23,10 +23,11 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/store/app'
 
 const router = useRouter()
+const route = useRoute()
 const appStore = useAppStore()
 
 const username = ref('')
@@ -39,7 +40,10 @@ async function handleLogin() {
   loading.value = true
   try {
     await appStore.login(username.value, password.value)
-    router.push('/admin/dashboard')
+    // Return to whatever the guard interrupted, defaulting to the dashboard.
+    // Only same-origin paths, so a crafted ?next= can't bounce elsewhere.
+    const next = String(route.query.next ?? '')
+    router.push(next.startsWith('/') && !next.startsWith('//') ? next : '/admin/dashboard')
   } catch (err: any) {
     error.value = err?.response?.data?.detail ?? 'Invalid credentials'
   } finally {
