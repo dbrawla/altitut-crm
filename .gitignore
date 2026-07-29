@@ -13,6 +13,7 @@ static/public/static/altcha.umd.js
 .vscode/
 
 __pycache__/
+.venv/
 .env
 config.toml
 docker-compose.override.yml
