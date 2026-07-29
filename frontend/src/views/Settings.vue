@@ -29,7 +29,7 @@
           <o-input v-model="s['app.from_email']" />
         </o-field>
         <o-field label="Admin notification emails">
-          <o-inputitems v-model="s['app.notify_emails']" :confirm-keys="[',', 'Enter']" />
+          <o-taginput v-model="s['app.notify_emails']" allow-new />
         </o-field>
         <o-field label="Language">
           <o-select v-model="s['app.lang']">
@@ -155,10 +155,10 @@
           <o-checkbox v-model="s['privacy.record_optin_ip']">Record opt-in IP addresses</o-checkbox>
         </o-field>
         <o-field label="Domain blocklist" message="Reject public signups from these domains.">
-          <o-inputitems v-model="s['privacy.domain_blocklist']" :confirm-keys="[',', 'Enter']" />
+          <o-taginput v-model="s['privacy.domain_blocklist']" allow-new />
         </o-field>
         <o-field label="Domain allowlist" message="If set, only these domains may sign up.">
-          <o-inputitems v-model="s['privacy.domain_allowlist']" :confirm-keys="[',', 'Enter']" />
+          <o-taginput v-model="s['privacy.domain_allowlist']" allow-new />
         </o-field>
       </o-tab-item>
 
@@ -200,7 +200,7 @@
         </template>
 
         <o-field label="Trusted URLs" class="mt-5" message="Allowed CORS origins and redirect targets.">
-          <o-inputitems v-model="s['security.trusted_urls']" :confirm-keys="[',', 'Enter']" />
+          <o-taginput v-model="s['security.trusted_urls']" allow-new />
         </o-field>
       </o-tab-item>
 
@@ -270,7 +270,7 @@
           The S3 provider is configured here but this build only implements filesystem uploads.
         </o-notification>
         <o-field label="Allowed extensions">
-          <o-inputitems v-model="s['upload.extensions']" :confirm-keys="[',', 'Enter']" />
+          <o-taginput v-model="s['upload.extensions']" allow-new />
         </o-field>
         <o-field label="Max file size (KB)">
           <o-input v-model.number="s['upload.max_file_size']" type="number" min="1" />

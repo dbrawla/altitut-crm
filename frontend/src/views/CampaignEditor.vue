@@ -111,7 +111,7 @@
           </o-field>
 
           <o-field label="Tags">
-            <o-inputitems v-model="form.tags" :confirm-keys="[',', 'Enter']" />
+            <o-taginput v-model="form.tags" allow-new />
           </o-field>
 
           <o-field label="Send at (optional)">
@@ -147,7 +147,7 @@
         <header class="modal-card-head"><p class="modal-card-title">Send a test</p></header>
         <section class="modal-card-body">
           <o-field label="Recipient emails" message="Must already exist as subscribers.">
-            <o-inputitems v-model="testEmails" :confirm-keys="[',', 'Enter']" />
+            <o-taginput v-model="testEmails" allow-new />
           </o-field>
         </section>
         <footer class="modal-card-foot is-justify-content-flex-end">
