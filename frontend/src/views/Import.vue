@@ -19,7 +19,12 @@
     </div>
 
     <div v-else class="box">
-      <o-field label="CSV file">
+      <o-field
+        label="CSV file"
+        message="Columns are detected automatically — an email column under any
+                 common name, plus first/last name or a single full-name column.
+                 The import log lists what was matched."
+      >
         <o-upload v-model="file" drag-drop expanded>
           <div class="drop">
             <p v-if="!file">Drop a CSV file here, or click to choose</p>

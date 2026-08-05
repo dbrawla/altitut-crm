@@ -15,6 +15,8 @@
             :class="{ active: isActive(item.to) }"
             :to="item.to"
           >
+            <!-- Icon markup is the hardcoded SVG path set in NAV below, never user-supplied. -->
+            <!-- eslint-disable-next-line vue/no-v-html -->
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" v-html="item.icon" />
             {{ item.label }}
           </router-link>
@@ -24,11 +26,11 @@
       <!-- User -->
       <div class="sidebar-footer" v-if="appStore.currentUser">
         <router-link class="sidebar-link" :class="{ active: isActive('/admin/profile') }" to="/admin/profile">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
           {{ appStore.currentUser.name || appStore.currentUser.username }}
         </router-link>
         <button class="sidebar-link" @click="appStore.logout()">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
           Logout
         </button>
       </div>

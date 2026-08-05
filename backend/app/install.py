@@ -40,7 +40,7 @@ SUPER_ADMIN_ROLE_ID = 1
 
 
 async def is_installed(conn: asyncpg.Connection) -> bool:
-    return await conn.fetchval("SELECT to_regclass('public.settings') IS NOT NULL")
+    return bool(await conn.fetchval("SELECT to_regclass('public.settings') IS NOT NULL"))
 
 
 async def install(pool: asyncpg.Pool) -> None:
@@ -115,7 +115,8 @@ async def install(pool: asyncpg.Pool) -> None:
             "<p>Use the link icon in the editor toolbar or when writing raw HTML or"
             " Markdown, simply suffix @TrackLink to the end of a URL to turn it into a"
             " tracking link. Example:</p>\n"
-            "<pre>&lt;a href=&quot;https:/&zwnj;/listmonk.app&#064;TrackLink&quot;&gt;&lt;/a&gt;</pre>\n"
+            "<pre>&lt;a href=&quot;https:/&zwnj;/listmonk.app&#064;TrackLink&quot;"
+            "&gt;&lt;/a&gt;</pre>\n"
             '<p>For help, refer to the <a href="https://listmonk.app/docs">documentation</a>.</p>',
             None, "richtext", None, [], {}, ["test-campaign"], "email", camp_tpl,
             [1], False, "welcome-to-listmonk", archive_tpl, {"name": "Subscriber"}, None, None,

@@ -30,13 +30,13 @@ _tokens: dict[str, _Token] = {}
 _lock = threading.Lock()
 
 
-def set(id: str, ttl_seconds: float, data: Any = None) -> None:  # noqa: A001
+def set(id: str, ttl_seconds: float, data: Any = None) -> None:
     """Store a token, overwriting any existing one with the same id."""
     with _lock:
         _tokens[id] = _Token(expires_at=time.monotonic() + ttl_seconds, data=data)
 
 
-def get(id: str) -> Any | None:  # noqa: A001
+def get(id: str) -> Any | None:
     """Return a token's data without consuming it, or None if absent/expired.
 
     Counts the attempt; after MAX_TRIES the token is dropped.
@@ -56,7 +56,7 @@ def get(id: str) -> Any | None:  # noqa: A001
         return tok.data if tok.data is not None else True
 
 
-def pop(id: str) -> Any | None:  # noqa: A001
+def pop(id: str) -> Any | None:
     """Return a token's data and consume it. None if absent or expired."""
     with _lock:
         tok = _tokens.pop(id, None)
@@ -65,7 +65,7 @@ def pop(id: str) -> Any | None:  # noqa: A001
         return tok.data if tok.data is not None else True
 
 
-def delete(id: str) -> None:  # noqa: A001
+def delete(id: str) -> None:
     with _lock:
         _tokens.pop(id, None)
 

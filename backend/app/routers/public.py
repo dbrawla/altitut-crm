@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -28,7 +29,10 @@ _RE_UUID = re.compile(
 
 # 1x1 transparent GIF — the original serves a PNG named px.png, but a GIF is the
 # smallest valid tracking pixel and every mail client renders it.
-_PIXEL = bytes.fromhex("47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b")
+_PIXEL = bytes.fromhex(
+    "47494638396101000100800000000000ffffff21f9040100000000"
+    "2c00000000010001000002024401003b"
+)
 
 _DUMMY = tmpl.DUMMY_UUID
 
@@ -440,7 +444,7 @@ async def robots() -> Response:
     return Response("User-agent: *\nDisallow: /\n", media_type="text/plain")
 
 
-def _appearance(key: str, mime: str):
+def _appearance(key: str, mime: str) -> Callable[[], Awaitable[Response]]:
     async def handler() -> Response:
         return Response(settings.get(key) or "", media_type=mime)
 

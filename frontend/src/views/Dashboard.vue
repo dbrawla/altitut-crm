@@ -1,6 +1,11 @@
 <template>
   <section class="section">
-    <h1 class="title is-4">Dashboard</h1>
+    <div class="level">
+      <div class="level-left"><h1 class="title is-4">Dashboard</h1></div>
+      <div class="level-right">
+        <router-link class="button" to="/admin/tutorial">📖 Tutorial</router-link>
+      </div>
+    </div>
 
     <div class="columns is-multiline">
       <div class="column is-3">

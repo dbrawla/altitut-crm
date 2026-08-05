@@ -22,7 +22,7 @@
       :data="rows"
       :loading="loading"
       checkable
-      v-model:checkedRows="checkedRows"
+      v-model:checked-rows="checkedRows"
       paginated
       backend-pagination
       :total="total"
@@ -72,6 +72,25 @@
               <option value="blocklisted">Blocklisted</option>
             </o-select>
           </o-field>
+          <o-field
+            label="Lists"
+            message="Campaigns send to lists, not to individual subscribers — someone on no list can never be a recipient."
+          >
+            <o-select v-model="form.lists" multiple native-size="4" expanded>
+              <option v-for="l in allLists" :key="l.id" :value="l.id">
+                {{ l.name }} ({{ l.optin }} opt-in)
+              </option>
+            </o-select>
+          </o-field>
+          <o-field>
+            <o-checkbox v-model="form.preconfirm_subscriptions">
+              Mark subscriptions confirmed
+            </o-checkbox>
+          </o-field>
+          <p class="help">
+            Double opt-in lists only send to <em>confirmed</em> subscribers. Leave this
+            unticked to email them a confirmation link instead.
+          </p>
         </section>
         <footer class="modal-card-foot is-justify-content-flex-end">
           <o-button @click="closeModal">Cancel</o-button>
@@ -86,8 +105,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { subscribers as api } from '@/api'
-import type { Subscriber, SubscriberStatus } from '@/types'
+import { subscribers as api, lists as listsApi } from '@/api'
+import type { List, Subscriber, SubscriberStatus } from '@/types'
 import dayjs from 'dayjs'
 
 const rows = ref<Subscriber[]>([])
@@ -102,7 +121,20 @@ const editingId = ref<number | null>(null)
 const saving = ref(false)
 const formError = ref('')
 
-const form = ref({ email: '', name: '', status: 'enabled' as SubscriberStatus })
+const allLists = ref<List[]>([])
+
+// PUT /api/subscribers/{id} replaces subscriptions wholesale (the backend passes
+// "delete subscriptions not in the list"), so `lists` must always be sent —
+// omitting it silently unsubscribes the person from everything.
+const emptyForm = () => ({
+  email: '',
+  name: '',
+  status: 'enabled' as SubscriberStatus,
+  lists: [] as number[],
+  preconfirm_subscriptions: false,
+})
+
+const form = ref(emptyForm())
 
 async function loadSubscribers() {
   loading.value = true
@@ -135,14 +167,22 @@ function formatDate(d: string | null) {
 
 function openCreate() {
   editingId.value = null
-  form.value = { email: '', name: '', status: 'enabled' }
+  form.value = emptyForm()
   formError.value = ''
   modalOpen.value = true
 }
 
 function editSub(sub: Subscriber) {
   editingId.value = sub.id
-  form.value = { email: sub.email, name: sub.name, status: sub.status }
+  form.value = {
+    email: sub.email,
+    name: sub.name,
+    status: sub.status,
+    lists: sub.lists.map((l) => l.id),
+    // Keep anyone already confirmed confirmed — saving an edit must not quietly
+    // demote them and drop them out of double opt-in campaigns.
+    preconfirm_subscriptions: sub.lists.some((l) => l.subscription_status === 'confirmed'),
+  }
   formError.value = ''
   modalOpen.value = true
 }
@@ -150,7 +190,7 @@ function editSub(sub: Subscriber) {
 function closeModal() {
   modalOpen.value = false
   editingId.value = null
-  form.value = { email: '', name: '', status: 'enabled' }
+  form.value = emptyForm()
   formError.value = ''
 }
 
@@ -195,5 +235,8 @@ async function blocklistSelected() {
   loadSubscribers()
 }
 
-onMounted(loadSubscribers)
+onMounted(async () => {
+  await loadSubscribers()
+  allLists.value = (await listsApi.list({ per_page: 100 })).results
+})
 </script>

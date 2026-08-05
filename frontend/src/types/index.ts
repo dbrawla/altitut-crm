@@ -56,6 +56,7 @@ export interface SubscriberUpdate {
   status?: SubscriberStatus
   attribs?: Record<string, unknown>
   lists?: number[]
+  preconfirm_subscriptions?: boolean
 }
 
 // -------------------------------------------------------------------------

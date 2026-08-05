@@ -114,7 +114,7 @@ async def _parse_request(request: Request) -> tuple[TxPayload, list[dict[str, An
 
 
 @router.post("/api/tx", dependencies=[auth.require("tx:send")])
-async def send_tx(request: Request):
+async def send_tx(request: Request) -> dict[str, Any]:
     payload, attachments = await _parse_request(request)
     m = _validate(payload)
 
@@ -145,6 +145,8 @@ async def send_tx(request: Request):
                     not_found.append(email or f"id {sub_id}")
                     continue
 
+        if sub is None:  # unreachable: the branch above continues on None
+            continue
         subject, html = tmpl.render_tx(
             template["body"], m.subject or template.get("subject") or "", sub, m.data
         )

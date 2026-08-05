@@ -66,6 +66,29 @@ npm run dev
 
 ---
 
+## Tests
+
+```bash
+# Backend: pytest + ruff + mypy --strict, run inside the running container
+powershell -File scripts/backend-checks.ps1
+# ...or directly, with the dev extras installed: pip install -e ".[dev]"
+cd backend && pytest && ruff check app && mypy --strict app
+
+# Frontend lint + types
+cd frontend && npm run lint && npm run type-check
+
+# End-to-end, headless, against a running stack
+docker compose up -d --build
+cd e2e && npm install && npm test
+```
+
+The E2E suite drives the admin UI in headless Chrome via Playwright. It uses the
+locally installed Chrome (`channel: 'chrome'`) so there is no browser download.
+Override the target with `BASE_URL`, and the login with `ADMIN_USER` /
+`ADMIN_PASSWORD`.
+
+---
+
 ## Project layout
 
 ```

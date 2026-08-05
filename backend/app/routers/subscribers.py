@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import uuid as uuidlib
+from collections.abc import AsyncIterator
 from typing import Any
 
 import orjson
-from fastapi import APIRouter, Depends, Query, Response
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from app import auth, db
@@ -32,6 +34,14 @@ def _order_clause(order_by: str, order: str) -> str:
     return f"subscribers.{field} {direction}"
 
 
+# Statement terminators and comment openers. The segmentation condition is
+# interpolated into a WHERE clause, so any of these let a caller close the
+# expression and append their own statement (`') OR TRUE; DROP TABLE ...--`).
+# The permission gate alone is not enough: it is meant to grant *filtering*,
+# not arbitrary statement execution.
+_SQL_BREAKOUT = re.compile(r";|--|/\*|\*/")
+
+
 def _query_cond(user: auth.User, query: str) -> str:
     """The arbitrary SQL segmentation condition. Only users with the
     subscribers:sql_query permission may use it (original behavior)."""
@@ -40,6 +50,20 @@ def _query_cond(user: auth.User, query: str) -> str:
         return "TRUE"
     if not auth.has_perm(user, "subscribers:sql_query"):
         raise bad_request("missing permission: subscribers:sql_query")
+    if _SQL_BREAKOUT.search(query):
+        raise bad_request("query may not contain ';' or SQL comment markers")
+    # Prefix balance, not a total count: `1=1) OR (TRUE` counts even but still
+    # closes the wrapper parenthesis early and appends its own clause.
+    depth = 0
+    for ch in query:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                raise bad_request("unbalanced parentheses in query")
+    if depth != 0:
+        raise bad_request("unbalanced parentheses in query")
     return f"({query})"
 
 
@@ -70,7 +94,9 @@ async def _attach_lists(subs: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/subscribers", dependencies=[auth.require("subscribers:get", "subscribers:get_all")])
+@router.get(
+    "/api/subscribers", dependencies=[auth.require("subscribers:get", "subscribers:get_all")]
+)
 async def get_subscribers(
     user: auth.CurrentUser,
     pg: Pagination = Depends(),
@@ -80,7 +106,7 @@ async def get_subscribers(
     search: str = "",
     order_by: str = "id",
     order: str = "DESC",
-):
+) -> dict[str, Any]:
     lists = _scope_lists(user, list_id, "get")
     cond = _query_cond(user, query)
 
@@ -105,12 +131,12 @@ async def export_subscribers(
     query: str = "",
     list_id: list[int] = Query(default=[]),
     subscriber_id: list[int] = Query(default=[], alias="id"),
-):
+) -> Response:
     lists = _scope_lists(user, list_id, "get")
     cond = _query_cond(user, query)
     sql = db.q("query-subscribers-for-export").replace("%query%", cond)
 
-    async def generate():
+    async def generate() -> AsyncIterator[str]:
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["uuid", "email", "name", "attributes", "status", "created_at", "updated_at"])
@@ -141,8 +167,11 @@ async def export_subscribers(
     )
 
 
-@router.get("/api/subscribers/{sub_id}", dependencies=[auth.require("subscribers:get", "subscribers:get_all")])
-async def get_subscriber(sub_id: int):
+@router.get(
+    "/api/subscribers/{sub_id}",
+    dependencies=[auth.require("subscribers:get", "subscribers:get_all")],
+)
+async def get_subscriber(sub_id: int) -> dict[str, Any]:
     sub = await db.fetchrow("get-subscriber", sub_id, "", "")
     if not sub:
         raise not_found("subscriber not found")
@@ -150,8 +179,11 @@ async def get_subscriber(sub_id: int):
     return ok(sub)
 
 
-@router.get("/api/subscribers/{sub_id}/export", dependencies=[auth.require("subscribers:get", "subscribers:get_all")])
-async def export_subscriber_data(sub_id: int):
+@router.get(
+    "/api/subscribers/{sub_id}/export",
+    dependencies=[auth.require("subscribers:get", "subscribers:get_all")],
+)
+async def export_subscriber_data(sub_id: int) -> dict[str, Any]:
     # $2 is typed UUID by Postgres; "" fails at bind time, so it must be NULL.
     data = await db.fetchval("export-subscriber-data", sub_id, None)
     if not data:
@@ -159,14 +191,17 @@ async def export_subscriber_data(sub_id: int):
     return ok(data)
 
 
-@router.get("/api/subscribers/{sub_id}/activity", dependencies=[auth.require("subscribers:get", "subscribers:get_all")])
-async def get_subscriber_activity(sub_id: int):
+@router.get(
+    "/api/subscribers/{sub_id}/activity",
+    dependencies=[auth.require("subscribers:get", "subscribers:get_all")],
+)
+async def get_subscriber_activity(sub_id: int) -> dict[str, Any]:
     row = await db.fetchrow("get-subscriber-activity", sub_id)
     return ok(row or {"views": [], "clicks": []})
 
 
 @router.get("/api/subscribers/{sub_id}/bounces", dependencies=[auth.require("bounces:get")])
-async def get_subscriber_bounces(sub_id: int):
+async def get_subscriber_bounces(sub_id: int) -> dict[str, Any]:
     # The query is named query-bounces and needs its %order% placeholder filled.
     sql = db.q("query-bounces").replace("%order%", "created_at DESC")
     rows = await db.fetch(sql, 0, 0, sub_id, "", 0, 1000)
@@ -176,7 +211,7 @@ async def get_subscriber_bounces(sub_id: int):
 
 
 @router.delete("/api/subscribers/{sub_id}/bounces", dependencies=[auth.require("bounces:manage")])
-async def delete_subscriber_bounces(sub_id: int):
+async def delete_subscriber_bounces(sub_id: int) -> dict[str, Any]:
     # $2 is typed UUID; pass NULL rather than "" when looking up by id.
     await db.execute("delete-bounces-by-subscriber", sub_id, None)
     return ok(True)
@@ -197,7 +232,7 @@ class SubscriberPayload(BaseModel):
 
 
 @router.post("/api/subscribers", dependencies=[auth.require("subscribers:manage")])
-async def create_subscriber(payload: SubscriberPayload, user: auth.CurrentUser):
+async def create_subscriber(payload: SubscriberPayload, user: auth.CurrentUser) -> dict[str, Any]:
     email = payload.email.strip().lower()
     if not email or "@" not in email:
         raise bad_request("invalid email")
@@ -211,7 +246,7 @@ async def create_subscriber(payload: SubscriberPayload, user: auth.CurrentUser):
         )
     except Exception as e:
         if "unique" in str(e).lower() or "duplicate" in str(e).lower():
-            raise bad_request("email already exists")
+            raise bad_request("email already exists") from e
         raise
 
     # Send opt-in confirmation for double opt-in lists (original behavior).
@@ -221,32 +256,40 @@ async def create_subscriber(payload: SubscriberPayload, user: auth.CurrentUser):
         await notifs.send_optin_confirmation_by_id(sub_id)
 
     sub = await db.fetchrow("get-subscriber", sub_id, "", "")
+    if not sub:
+        raise not_found("subscriber not found")
     await _attach_lists([sub])
     return ok(sub)
 
 
 @router.delete("/api/subscribers/{sub_id}", dependencies=[auth.require("subscribers:manage")])
-async def delete_subscriber(sub_id: int):
+async def delete_subscriber(sub_id: int) -> dict[str, Any]:
     await db.execute("delete-subscribers", [sub_id], [])
     return ok(True)
 
 
 @router.delete("/api/subscribers", dependencies=[auth.require("subscribers:manage")])
-async def delete_subscribers(subscriber_id: list[int] = Query(default=[], alias="id")):
+async def delete_subscribers(
+    subscriber_id: list[int] = Query(default=[], alias="id")
+) -> dict[str, Any]:
     if not subscriber_id:
         raise bad_request("no IDs given")
     await db.execute("delete-subscribers", subscriber_id, [])
     return ok(True)
 
 
-@router.put("/api/subscribers/{sub_id}/blocklist", dependencies=[auth.require("subscribers:manage")])
-async def blocklist_subscriber(sub_id: int):
+@router.put(
+    "/api/subscribers/{sub_id}/blocklist", dependencies=[auth.require("subscribers:manage")]
+)
+async def blocklist_subscriber(sub_id: int) -> dict[str, Any]:
     await db.execute("blocklist-subscribers", [sub_id])
     return ok(True)
 
 
 @router.put("/api/subscribers/blocklist", dependencies=[auth.require("subscribers:manage")])
-async def blocklist_subscribers(subscriber_id: list[int] = Query(default=[], alias="id")):
+async def blocklist_subscribers(
+    subscriber_id: list[int] = Query(default=[], alias="id")
+) -> dict[str, Any]:
     if not subscriber_id:
         raise bad_request("no IDs given")
     await db.execute("blocklist-subscribers", subscriber_id)
@@ -254,7 +297,7 @@ async def blocklist_subscribers(subscriber_id: list[int] = Query(default=[], ali
 
 
 @router.post("/api/subscribers/{sub_id}/optin", dependencies=[auth.require("subscribers:manage")])
-async def resend_optin(sub_id: int):
+async def resend_optin(sub_id: int) -> dict[str, Any]:
     from app import notifs
 
     sent = await notifs.send_optin_confirmation_by_id(sub_id)
@@ -293,7 +336,7 @@ async def _manage_lists_by_ids(payload: ListsPayload) -> None:
 
 
 @router.put("/api/subscribers/lists", dependencies=[auth.require("subscribers:manage")])
-async def manage_subscriber_lists(payload: ListsPayload, user: auth.CurrentUser):
+async def manage_subscriber_lists(payload: ListsPayload, user: auth.CurrentUser) -> dict[str, Any]:
     if not payload.ids:
         raise bad_request("no IDs given")
     if not payload.target_list_ids:
@@ -304,7 +347,9 @@ async def manage_subscriber_lists(payload: ListsPayload, user: auth.CurrentUser)
 
 
 @router.put("/api/subscribers/lists/{sub_id}", dependencies=[auth.require("subscribers:manage")])
-async def manage_single_subscriber_lists(sub_id: int, payload: ListsPayload, user: auth.CurrentUser):
+async def manage_single_subscriber_lists(
+    sub_id: int, payload: ListsPayload, user: auth.CurrentUser
+) -> dict[str, Any]:
     payload.ids = [sub_id]
     payload.target_list_ids = _scope_lists(user, payload.target_list_ids, "manage")
     await _manage_lists_by_ids(payload)
@@ -314,7 +359,9 @@ async def manage_single_subscriber_lists(sub_id: int, payload: ListsPayload, use
 # Declared after the static PUT /api/subscribers/lists and /blocklist paths —
 # FastAPI matches routes in declaration order, so {sub_id} would shadow them.
 @router.put("/api/subscribers/{sub_id}", dependencies=[auth.require("subscribers:manage")])
-async def update_subscriber(sub_id: int, payload: SubscriberPayload, user: auth.CurrentUser):
+async def update_subscriber(
+    sub_id: int, payload: SubscriberPayload, user: auth.CurrentUser
+) -> dict[str, Any]:
     email = payload.email.strip().lower()
     lists = _scope_lists(user, payload.lists, "manage") if payload.lists else []
     permitted, all_ok = auth.permitted_list_ids(user, "manage")
@@ -347,7 +394,9 @@ class SubscriberPatch(BaseModel):
 
 
 @router.patch("/api/subscribers/{sub_id}", dependencies=[auth.require("subscribers:manage")])
-async def patch_subscriber(sub_id: int, payload: SubscriberPatch, user: auth.CurrentUser):
+async def patch_subscriber(
+    sub_id: int, payload: SubscriberPatch, user: auth.CurrentUser
+) -> dict[str, Any]:
     """Partial update — port of cmd/subscribers.go PatchSubscriber.
 
     Prefills the update with the subscriber's current values so only the fields
@@ -387,6 +436,8 @@ async def patch_subscriber(sub_id: int, payload: SubscriberPatch, user: auth.Cur
         False,
     )
     sub = await db.fetchrow("get-subscriber", sub_id, None, "")
+    if not sub:
+        raise not_found("subscriber not found")
     await _attach_lists([sub])
     return ok(sub)
 
@@ -401,7 +452,7 @@ def _query_template(user: auth.User, payload: ListsPayload) -> tuple[str, list[A
 
 
 @router.put("/api/subscribers/query/blocklist", dependencies=[auth.require("subscribers:manage")])
-async def blocklist_by_query(payload: ListsPayload, user: auth.CurrentUser):
+async def blocklist_by_query(payload: ListsPayload, user: auth.CurrentUser) -> dict[str, Any]:
     tpl, args = _query_template(user, payload)
     sql = db.q("blocklist-subscribers-by-query").replace("%query%", tpl)
     await db.execute(sql, *args)
@@ -409,7 +460,7 @@ async def blocklist_by_query(payload: ListsPayload, user: auth.CurrentUser):
 
 
 @router.post("/api/subscribers/query/delete", dependencies=[auth.require("subscribers:manage")])
-async def delete_by_query(payload: ListsPayload, user: auth.CurrentUser):
+async def delete_by_query(payload: ListsPayload, user: auth.CurrentUser) -> dict[str, Any]:
     if payload.query.strip() == "" and not payload.list_ids:
         # Match-all deletes must be explicit in the UI; same guard as upstream.
         raise bad_request("refusing to delete with an empty query")
@@ -420,7 +471,7 @@ async def delete_by_query(payload: ListsPayload, user: auth.CurrentUser):
 
 
 @router.put("/api/subscribers/query/lists", dependencies=[auth.require("subscribers:manage")])
-async def manage_lists_by_query(payload: ListsPayload, user: auth.CurrentUser):
+async def manage_lists_by_query(payload: ListsPayload, user: auth.CurrentUser) -> dict[str, Any]:
     if not payload.target_list_ids:
         raise bad_request("no target lists given")
     payload.target_list_ids = _scope_lists(user, payload.target_list_ids, "manage")

@@ -9,6 +9,7 @@ A single logging.Handler feeds both:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 from collections import deque
@@ -21,7 +22,7 @@ SUB_QUEUE_SIZE = 100
 _lines: deque[str] = deque(maxlen=MAX_LINES)
 _lock = threading.Lock()
 
-_subscribers: set[asyncio.Queue] = set()
+_subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 _loop: asyncio.AbstractEventLoop | None = None
 
 
@@ -47,17 +48,13 @@ def _publish(event: dict[str, Any]) -> None:
 
     def deliver() -> None:
         for q in list(_subscribers):
-            try:
+            # Drop for this subscriber rather than blocking the logger.
+            with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(event)
-            except asyncio.QueueFull:
-                # Drop for this subscriber rather than blocking the logger.
-                pass
 
-    try:
+    # RuntimeError = loop already closed (shutdown).
+    with contextlib.suppress(RuntimeError):
         _loop.call_soon_threadsafe(deliver)
-    except RuntimeError:
-        # Loop already closed (shutdown).
-        pass
 
 
 def lines() -> list[str]:
@@ -65,13 +62,13 @@ def lines() -> list[str]:
         return list(_lines)
 
 
-def subscribe() -> asyncio.Queue:
-    q: asyncio.Queue = asyncio.Queue(maxsize=SUB_QUEUE_SIZE)
+def subscribe() -> asyncio.Queue[dict[str, Any]]:
+    q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=SUB_QUEUE_SIZE)
     _subscribers.add(q)
     return q
 
 
-def unsubscribe(q: asyncio.Queue) -> None:
+def unsubscribe(q: asyncio.Queue[dict[str, Any]]) -> None:
     _subscribers.discard(q)
 
 

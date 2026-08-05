@@ -111,7 +111,7 @@
           </o-field>
 
           <o-field label="Tags">
-            <o-inputitems v-model="form.tags" :confirm-keys="[',', 'Enter']" />
+            <ListInput v-model="form.tags" placeholder="newsletter, promo" />
           </o-field>
 
           <o-field label="Send at (optional)">
@@ -147,7 +147,7 @@
         <header class="modal-card-head"><p class="modal-card-title">Send a test</p></header>
         <section class="modal-card-body">
           <o-field label="Recipient emails" message="Must already exist as subscribers.">
-            <o-inputitems v-model="testEmails" :confirm-keys="[',', 'Enter']" />
+            <ListInput v-model="testEmails" placeholder="you@example.com, other@example.com" />
           </o-field>
         </section>
         <footer class="modal-card-foot is-justify-content-flex-end">
@@ -163,6 +163,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import ListInput from '@/components/ListInput.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { campaigns as api, lists as listsApi, templates as tplApi, server } from '@/api'
 import type { Campaign, List, Template, ContentType, CampaignStatus } from '@/types'
@@ -319,8 +320,7 @@ async function preview() {
   try {
     // Save first so the preview reflects what's on screen.
     if (id.value) await api.update(id.value, payload())
-    const res = await api.preview(id.value!)
-    previewHtml.value = (res as any).body ?? (res as any)
+    previewHtml.value = await api.preview(id.value!)
     previewOpen.value = true
   } catch (e: any) {
     error.value = e?.response?.data?.detail ?? 'Could not render a preview'

@@ -7,6 +7,7 @@ regress: Go-style niladic template funcs, SMTP block selection, and the
 route ordering that /subscription/optin/<uuid> depends on.
 """
 
+import aiosmtplib
 from starlette.testclient import TestClient
 
 import app.main as m
@@ -59,6 +60,234 @@ def test_smtp_block_selection():
 
     settings.cache["smtp"] = [{"enabled": False, "host": "x", "name": ""}]
     assert manager._smtp_block("email") is None
+
+
+def test_smtp_test_unmasks_the_saved_password():
+    """GET /api/settings masks secrets, so the block the settings page posts back
+    to /api/settings/smtp/test carries `••••` instead of the password. Without
+    un-masking, every test against an already-saved server 535s."""
+    uuid = "33333333-3333-3333-3333-333333333333"
+    settings.cache["smtp"] = [
+        {"uuid": uuid, "enabled": True, "host": "smtp.example.com", "password": "s3cret"},
+    ]
+
+    sent: dict[str, object] = {}
+
+    async def fake_deliver(msg, block):
+        sent.update(block)
+
+    real_deliver, manager._deliver = manager._deliver, fake_deliver
+    try:
+        masked = settings.masked({"smtp": settings.cache["smtp"]})["smtp"][0]
+        assert masked["password"] == "•" * len("s3cret"), "precondition: it is masked"
+
+        import asyncio
+
+        asyncio.run(manager.send_smtp_test(dict(masked), "to@example.com"))
+    finally:
+        manager._deliver = real_deliver
+
+    assert sent["password"] == "s3cret", f"mask reached SMTP: {sent['password']!r}"
+
+
+def test_smtp_connections_are_reused_across_messages():
+    """Every message used to pay a fresh TCP+TLS handshake and AUTH. For a
+    10k-subscriber campaign that is 10k connections, which providers throttle."""
+    import asyncio
+
+    from app import manager
+
+    connects = 0
+    sent = 0
+
+    class FakeSMTP:
+        def __init__(self, **kwargs):
+            self.is_connected = False
+
+        async def connect(self):
+            nonlocal connects
+            connects += 1
+            self.is_connected = True
+
+        async def sendmail(self, sender, recipients, raw):
+            nonlocal sent
+            assert self.is_connected, "sent on a closed connection"
+            sent += 1
+
+        async def quit(self):
+            self.is_connected = False
+
+        def close(self):
+            self.is_connected = False
+
+    block = {
+        "host": "smtp.example.com", "port": 587, "tls_type": "STARTTLS",
+        "auth_protocol": "plain", "username": "u", "password": "p",
+        "max_conns": 2, "idle_timeout": "15s", "max_msg_retries": 0,
+    }
+
+    real_smtp, aiosmtplib.SMTP = aiosmtplib.SMTP, FakeSMTP
+    real_pool, manager._pool = manager._pool, manager._SmtpPool()
+    try:
+        async def run():
+            msg = manager._build("a@b.c", "s", "<p>hi</p>", "hi", "from@x.y")
+            for _ in range(6):
+                await manager._deliver(msg, block)
+        asyncio.run(run())
+    finally:
+        aiosmtplib.SMTP = real_smtp
+        manager._pool = real_pool
+
+    assert sent == 6, sent
+    # Serially, one pooled connection carries all six messages.
+    assert connects == 1, f"expected connection reuse, opened {connects}"
+
+
+def test_smtp_pool_discards_a_connection_that_errored():
+    """A connection whose protocol state is unknown must not be handed back."""
+    import asyncio
+
+    from app import manager
+
+    connects = 0
+
+    class FlakySMTP:
+        def __init__(self, **kwargs):
+            self.is_connected = False
+
+        async def connect(self):
+            nonlocal connects
+            connects += 1
+            self.is_connected = True
+
+        async def sendmail(self, sender, recipients, raw):
+            raise OSError("connection reset")
+
+        async def quit(self):
+            self.is_connected = False
+
+        def close(self):
+            self.is_connected = False
+
+    block = {"host": "h", "port": 25, "max_conns": 1, "max_msg_retries": 1}
+
+    real_smtp, aiosmtplib.SMTP = aiosmtplib.SMTP, FlakySMTP
+    real_pool, manager._pool = manager._pool, manager._SmtpPool()
+    try:
+        async def run():
+            msg = manager._build("a@b.c", "s", "<p>hi</p>", "hi", "from@x.y")
+            try:
+                await manager._deliver(msg, block)
+            except OSError:
+                pass
+        asyncio.run(run())
+    finally:
+        aiosmtplib.SMTP = real_smtp
+        manager._pool = real_pool
+
+    # 1 initial + 1 retry, each a fresh connection rather than the poisoned one.
+    assert connects == 2, f"broken connection was reused: {connects} connects"
+
+
+def test_duration_parsing_for_pool_timeouts():
+    from app.manager import _duration_seconds
+
+    assert _duration_seconds("15s", 0) == 15.0
+    assert _duration_seconds("10ms", 0) == 0.01
+    assert _duration_seconds("2m", 0) == 120.0
+    assert _duration_seconds("", 9) == 9.0
+    assert _duration_seconds("nonsense", 9) == 9.0
+    assert _duration_seconds(30, 0) == 30.0
+
+
+def test_sql_segmentation_blocks_statement_breakout():
+    """subscribers:sql_query is meant to grant filtering, not arbitrary
+    statement execution. The condition is interpolated into a WHERE clause, so
+    `;` and comment markers would let a caller append their own statement."""
+    from app.routers.subscribers import _query_cond
+
+    # role id 2 = not the super admin, so has_perm() consults the permission list
+    admin = {"id": 1, "user_role": {"id": 2, "permissions": ["subscribers:sql_query"]}}
+
+    # Plain conditions still pass through.
+    assert _query_cond(admin, "subscribers.status = 'enabled'") == (
+        "(subscribers.status = 'enabled')"
+    )
+    assert _query_cond(admin, "") == "TRUE"
+
+    for bad in (
+        "1=1; DROP TABLE subscribers",
+        "1=1 -- comment",
+        "1=1 /* block */",
+        "1=1) OR (TRUE",  # unbalanced: closes the wrapper early
+    ):
+        try:
+            _query_cond(admin, bad)
+        except Exception as e:
+            assert getattr(e, "status_code", None) == 400, (bad, e)
+        else:
+            raise AssertionError(f"should have been rejected: {bad}")
+
+    # Without the permission it is refused outright.
+    try:
+        _query_cond({"id": 2, "user_role": {"id": 2, "permissions": []}}, "1=1")
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 400, e
+    else:
+        raise AssertionError("missing permission should be rejected")
+
+
+def test_import_detects_email_and_name_columns():
+    """CSVs exported from other tools rarely use listmonk's own header names."""
+    import csv as _csv
+    import io as _io
+
+    from app.importer import _row_name, map_columns
+
+    def parse(text):
+        r = _csv.DictReader(_io.StringIO(text))
+        rows = list(r)
+        return [h for h in (r.fieldnames or []) if h], rows
+
+    # First/last pair, arbitrary casing and separators.
+    headers, rows = parse("First_Name,Last Name,E-Mail Address\nAda,Lovelace,ada@x.io\n")
+    cols = map_columns(headers, rows)
+    assert cols["email"] == "E-Mail Address", cols
+    assert cols["first"] == "First_Name" and cols["last"] == "Last Name", cols
+    # Joined with a space so tmpl.py's FirstName/LastName split works.
+    assert _row_name(rows[0], cols) == "Ada Lovelace"
+
+    # A single full-name column.
+    headers, rows = parse("Full Name,email\nGrace Hopper,grace@x.io\n")
+    cols = map_columns(headers, rows)
+    assert cols["name"] == "Full Name" and cols["first"] is None, cols
+    assert _row_name(rows[0], cols) == "Grace Hopper"
+
+    # First name only.
+    headers, rows = parse("fname,email\nAlan,alan@x.io\n")
+    cols = map_columns(headers, rows)
+    assert _row_name(rows[0], cols) == "Alan"
+
+    # listmonk's own format still works.
+    headers, rows = parse("email,name,attributes\na@b.c,A B,{}\n")
+    cols = map_columns(headers, rows)
+    assert cols["email"] == "email" and cols["name"] == "name"
+    assert cols["attribs"] == "attributes"
+
+    # No recognisable email header — fall back to sniffing the values.
+    headers, rows = parse("col1,col2,col3\nAda,Lovelace,ada@x.io\n")
+    cols = map_columns(headers, rows)
+    assert cols["email"] == "col3", cols
+
+    # Nothing that looks like an address at all.
+    headers, rows = parse("a,b\n1,2\n")
+    assert map_columns(headers, rows)["email"] is None
+
+    # `name` must not be claimed when it is really the first-name column.
+    headers, rows = parse("Name,Surname,Email\nKatherine,Johnson,kj@x.io\n")
+    cols = map_columns(headers, rows)
+    assert cols["last"] == "Surname"
+    assert _row_name(rows[0], cols) == "Katherine Johnson", cols
 
 
 def test_optin_route_is_matched_before_the_two_uuid_route():
@@ -255,6 +484,12 @@ if __name__ == "__main__":
     for fn in (
         test_niladic_template_funcs_render_values,
         test_smtp_block_selection,
+        test_smtp_test_unmasks_the_saved_password,
+        test_smtp_connections_are_reused_across_messages,
+        test_smtp_pool_discards_a_connection_that_errored,
+        test_duration_parsing_for_pool_timeouts,
+        test_sql_segmentation_blocks_statement_breakout,
+        test_import_detects_email_and_name_columns,
         test_optin_route_is_matched_before_the_two_uuid_route,
         test_tracking_pixel_always_returns_an_image,
         test_list_unsubscribe_header_is_not_encoded,

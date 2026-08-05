@@ -15,9 +15,11 @@ The SQL is the original listmonk queries, so the checkpointing semantics
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import email.policy
 import logging
 import time
+from collections.abc import AsyncIterator
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid, parseaddr
 from typing import Any
@@ -41,10 +43,10 @@ send_rates: dict[int, int] = {}
 _sent_marks: dict[int, list[float]] = {}
 
 # Campaigns currently being processed, and sent counts not yet flushed to the DB.
-_active: dict[int, asyncio.Task] = {}
+_active: dict[int, asyncio.Task[None]] = {}
 _pending_sent: dict[int, int] = {}
 
-_scanner: asyncio.Task | None = None
+_scanner: asyncio.Task[None] | None = None
 _rate_lock = asyncio.Lock()
 _last_send_at = 0.0
 
@@ -56,7 +58,9 @@ _last_send_at = 0.0
 
 def _smtp_block(messenger: str) -> dict[str, Any] | None:
     """Resolve a campaign's `messenger` name to an enabled `smtp` settings block."""
-    blocks = [b for b in (settings.get("smtp") or []) if b.get("enabled")]
+    blocks: list[dict[str, Any]] = [
+        b for b in (settings.get("smtp") or []) if b.get("enabled")
+    ]
     if not blocks:
         return None
     # "email" (the default) means the first enabled block; named blocks are
@@ -143,8 +147,7 @@ async def send(
     await _deliver(msg, block)
 
 
-async def _deliver(msg: EmailMessage, block: dict[str, Any]) -> None:
-    """Hand one built message to an SMTP server described by `block`."""
+def _client_kwargs(block: dict[str, Any]) -> dict[str, Any]:
     tls = (block.get("tls_type") or "none").upper()
     kwargs: dict[str, Any] = {
         "hostname": block.get("host"),
@@ -159,7 +162,135 @@ async def _deliver(msg: EmailMessage, block: dict[str, Any]) -> None:
     if (block.get("auth_protocol") or "none") != "none" and block.get("username"):
         kwargs["username"] = block["username"]
         kwargs["password"] = block.get("password") or ""
+    return kwargs
 
+
+def _pool_key(block: dict[str, Any]) -> str:
+    """Identity of the server a connection is bound to. Deliberately excludes
+    the block's uuid so that renaming a block does not orphan live connections,
+    and includes the credentials so a password change forces reconnection."""
+    return "|".join(
+        str(block.get(k) or "")
+        for k in ("host", "port", "tls_type", "auth_protocol", "username", "password")
+    )
+
+
+class _SmtpPool:
+    """Keeps authenticated SMTP connections alive between messages.
+
+    Without this, every message paid a fresh TCP + TLS handshake and AUTH — for
+    a 10k-subscriber campaign that is 10k handshakes, which providers throttle
+    or treat as abuse. `max_conns` and `idle_timeout` come from the SMTP block
+    the settings UI already exposes.
+    """
+
+    def __init__(self) -> None:
+        # pool key -> (client, released_at) stack of idle connections
+        self._idle: dict[str, list[tuple[aiosmtplib.SMTP, float]]] = {}
+        # pool key -> semaphore capping total concurrent connections
+        self._slots: dict[str, asyncio.Semaphore] = {}
+        self._lock = asyncio.Lock()
+
+    async def _slot(self, key: str, max_conns: int) -> asyncio.Semaphore:
+        async with self._lock:
+            sem = self._slots.get(key)
+            if sem is None or getattr(sem, "_altitut_size", None) != max_conns:
+                sem = asyncio.Semaphore(max_conns)
+                sem._altitut_size = max_conns  # type: ignore[attr-defined]
+                self._slots[key] = sem
+            return sem
+
+    async def _take_idle(self, key: str, idle_timeout: float) -> aiosmtplib.SMTP | None:
+        now = time.monotonic()
+        async with self._lock:
+            stack = self._idle.get(key) or []
+            while stack:
+                client, released_at = stack.pop()
+                if now - released_at > idle_timeout:
+                    await _quiet_close(client)
+                    continue
+                if client.is_connected:
+                    return client
+                await _quiet_close(client)
+            return None
+
+    async def _put_idle(self, key: str, client: aiosmtplib.SMTP) -> None:
+        async with self._lock:
+            self._idle.setdefault(key, []).append((client, time.monotonic()))
+
+    @contextlib.asynccontextmanager
+    async def acquire(self, block: dict[str, Any]) -> AsyncIterator[aiosmtplib.SMTP]:
+        key = _pool_key(block)
+        max_conns = max(1, int(block.get("max_conns") or 10))
+        idle_timeout = _duration_seconds(block.get("idle_timeout"), 15.0)
+
+        sem = await self._slot(key, max_conns)
+        await sem.acquire()
+        client = await self._take_idle(key, idle_timeout)
+        reusable = True
+        try:
+            if client is None:
+                client = aiosmtplib.SMTP(**_client_kwargs(block))
+                await client.connect()
+            yield client
+        except Exception:
+            # Never hand a connection back after an error — its protocol state
+            # is unknown, and a half-open socket poisons the next message.
+            reusable = False
+            raise
+        finally:
+            if client is not None:
+                if reusable and client.is_connected:
+                    await self._put_idle(key, client)
+                else:
+                    await _quiet_close(client)
+            sem.release()
+
+    async def close(self) -> None:
+        async with self._lock:
+            stacks = list(self._idle.values())
+            self._idle.clear()
+            self._slots.clear()
+        for stack in stacks:
+            for client, _ in stack:
+                await _quiet_close(client)
+
+
+async def _quiet_close(client: aiosmtplib.SMTP) -> None:
+    # Best-effort teardown; the socket is going away regardless.
+    try:
+        with contextlib.suppress(Exception):
+            if client.is_connected:
+                await client.quit()
+    finally:
+        with contextlib.suppress(Exception):
+            client.close()
+
+
+def _duration_seconds(value: Any, default: float) -> float:
+    """Parse the Go-style durations the settings UI stores ("15s", "10ms")."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    for suffix, mult in (("ms", 0.001), ("s", 1.0), ("m", 60.0), ("h", 3600.0)):
+        if text.endswith(suffix):
+            try:
+                return float(text[: -len(suffix)]) * mult
+            except ValueError:
+                return default
+    try:
+        return float(text)
+    except ValueError:
+        return default
+
+
+_pool = _SmtpPool()
+
+
+async def _deliver(msg: EmailMessage, block: dict[str, Any]) -> None:
+    """Hand one built message to an SMTP server described by `block`."""
     # aiosmtplib.flatten_message() hardcodes email.policy.SMTP (78-char lines)
     # and ignores msg.policy, which would re-encode List-Unsubscribe as an
     # RFC 2047 encoded-word. Serialise here with _POLICY and hand over bytes,
@@ -171,7 +302,8 @@ async def _deliver(msg: EmailMessage, block: dict[str, Any]) -> None:
     retries = int(block.get("max_msg_retries") or 2)
     for attempt in range(retries + 1):
         try:
-            await aiosmtplib.send(raw, sender=sender, recipients=recipients, **kwargs)
+            async with _pool.acquire(block) as client:
+                await client.sendmail(sender, recipients, raw)
             return
         except Exception:
             if attempt == retries:
@@ -186,6 +318,12 @@ async def send_smtp_test(block: dict[str, Any], to: str) -> None:
     it is used directly instead of going through _smtp_block().
     """
     from app import tmpl as _tmpl
+
+    # GET /api/settings masks secrets, so a block that came back from a page load
+    # carries `••••…` in `password` rather than the real one. PUT /api/settings
+    # un-masks via _restore_secrets(); this path has to do the same or every test
+    # on a saved server authenticates with the mask and fails 535. Matches on uuid.
+    settings._restore_secrets({"smtp": [block]}, settings.cache)
 
     html = _tmpl.render_system_email(
         "smtp-test", {"Settings": block, "Email": to}
@@ -378,6 +516,9 @@ async def _scan() -> None:
 async def start() -> None:
     global _scanner
     if _scanner is None:
+        # Pooled connections hold the old host/credentials, so drop them when
+        # the SMTP settings change rather than sending through a stale server.
+        settings.reload_hooks.append(_pool.close)
         _scanner = asyncio.create_task(_scan())
         log.info("campaign manager started")
 
@@ -392,3 +533,4 @@ async def stop() -> None:
     if _active:
         await asyncio.gather(*_active.values(), return_exceptions=True)
     _active.clear()
+    await _pool.close()

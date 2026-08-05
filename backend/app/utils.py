@@ -54,7 +54,9 @@ class Pagination:
         # but for LIMIT params asyncpg wants None for no limit.
         return self.per_page
 
-    def results(self, results: list, total: int, query: str = "") -> dict:
+    def results(
+        self, results: list[Any], total: int, query: str = ""
+    ) -> dict[str, Any]:
         return {
             "results": results,
             "query": query,

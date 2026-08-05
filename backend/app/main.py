@@ -9,9 +9,9 @@ Startup: connect the asyncpg pool, run the idempotent first-run installer
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse

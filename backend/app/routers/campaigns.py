@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid as uuidlib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from app import auth, db, settings
 from app.utils import Pagination, bad_request, not_found, ok
 
+log = logging.getLogger("listmonk")
 router = APIRouter(tags=["campaigns"])
 
 _ORDER_FIELDS = {"name", "status", "created_at", "updated_at", "id"}
@@ -82,7 +84,7 @@ async def get_campaigns(
     order_by: str = "created_at",
     order: str = "DESC",
     no_body: bool = False,
-):
+) -> dict[str, Any]:
     all_ok, permitted = _scope(user, "get")
     field = order_by if order_by in _ORDER_FIELDS else "created_at"
     direction = "ASC" if order.upper() == "ASC" else "DESC"
@@ -100,8 +102,11 @@ async def get_campaigns(
     return ok(pg.results(rows, total, query))
 
 
-@router.get("/api/campaigns/running/stats", dependencies=[auth.require("campaigns:get", "campaigns:get_all")])
-async def running_stats():
+@router.get(
+    "/api/campaigns/running/stats",
+    dependencies=[auth.require("campaigns:get", "campaigns:get_all")],
+)
+async def running_stats() -> dict[str, Any]:
     rows = await db.fetch("get-campaign-status", "running")
     # rate: messages sent in the last minute per campaign (like upstream's stats).
     from app import manager
@@ -111,14 +116,17 @@ async def running_stats():
     return ok(rows)
 
 
-@router.get("/api/campaigns/{camp_id}", dependencies=[auth.require("campaigns:get", "campaigns:get_all")])
-async def get_campaign(camp_id: int, no_body: bool = False):
+@router.get(
+    "/api/campaigns/{camp_id}", dependencies=[auth.require("campaigns:get", "campaigns:get_all")]
+)
+async def get_campaign(camp_id: int, no_body: bool = False) -> dict[str, Any]:
     camp = await db.fetchrow("get-campaign", camp_id, None, "", "default")
     if not camp:
         raise not_found("campaign not found")
     await _attach_stats([camp])
     lists = await db.fetch(
-        "SELECT COALESCE(list_id, 0) AS id, list_name AS name FROM campaign_lists WHERE campaign_id=$1",
+        "SELECT COALESCE(list_id, 0) AS id, list_name AS name"
+        " FROM campaign_lists WHERE campaign_id=$1",
         camp_id,
     )
     camp["lists"] = lists
@@ -135,7 +143,7 @@ async def get_campaign(camp_id: int, no_body: bool = False):
 def _slugify(text: str) -> str:
     from slugify import slugify
 
-    return slugify(text)[:200] or None
+    return slugify(text)[:200] or ""
 
 
 async def _validate(payload: CampaignPayload, user: auth.User) -> CampaignPayload:
@@ -151,7 +159,7 @@ async def _validate(payload: CampaignPayload, user: auth.User) -> CampaignPayloa
         raise bad_request("invalid from_email")
     if not payload.from_email:
         payload.from_email = settings.get("app.from_email", "")
-    if payload.send_at and payload.send_at < datetime.now(timezone.utc) - timedelta(minutes=1):
+    if payload.send_at and payload.send_at < datetime.now(UTC) - timedelta(minutes=1):
         raise bad_request("send_at date is in the past")
     if payload.archive and not payload.archive_slug:
         payload.archive_slug = _slugify(payload.name)
@@ -161,8 +169,10 @@ async def _validate(payload: CampaignPayload, user: auth.User) -> CampaignPayloa
     return payload
 
 
-@router.post("/api/campaigns", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")])
-async def create_campaign(payload: CampaignPayload, user: auth.CurrentUser):
+@router.post(
+    "/api/campaigns", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")]
+)
+async def create_campaign(payload: CampaignPayload, user: auth.CurrentUser) -> dict[str, Any]:
     payload = await _validate(payload, user)
     camp_id = await db.fetchval(
         "create-campaign",
@@ -178,8 +188,13 @@ async def create_campaign(payload: CampaignPayload, user: auth.CurrentUser):
     return await get_campaign(camp_id)
 
 
-@router.put("/api/campaigns/{camp_id}", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")])
-async def update_campaign(camp_id: int, payload: CampaignPayload, user: auth.CurrentUser):
+@router.put(
+    "/api/campaigns/{camp_id}",
+    dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")],
+)
+async def update_campaign(
+    camp_id: int, payload: CampaignPayload, user: auth.CurrentUser
+) -> dict[str, Any]:
     cur = await db.fetchrow("get-campaign", camp_id, None, "", "default")
     if not cur:
         raise not_found("campaign not found")
@@ -202,8 +217,11 @@ class StatusPayload(BaseModel):
     status: str
 
 
-@router.put("/api/campaigns/{camp_id}/status", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all", "campaigns:send")])
-async def update_campaign_status(camp_id: int, payload: StatusPayload):
+@router.put(
+    "/api/campaigns/{camp_id}/status",
+    dependencies=[auth.require("campaigns:manage", "campaigns:manage_all", "campaigns:send")],
+)
+async def update_campaign_status(camp_id: int, payload: StatusPayload) -> dict[str, Any]:
     camp = await db.fetchrow("get-campaign", camp_id, None, "", "default")
     if not camp:
         raise not_found("campaign not found")
@@ -225,8 +243,11 @@ class ArchivePayload(BaseModel):
     archive_meta: dict[str, Any] = {}
 
 
-@router.put("/api/campaigns/{camp_id}/archive", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")])
-async def update_campaign_archive(camp_id: int, payload: ArchivePayload):
+@router.put(
+    "/api/campaigns/{camp_id}/archive",
+    dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")],
+)
+async def update_campaign_archive(camp_id: int, payload: ArchivePayload) -> dict[str, Any]:
     import orjson
 
     await db.execute(
@@ -238,15 +259,22 @@ async def update_campaign_archive(camp_id: int, payload: ArchivePayload):
     return ok(True)
 
 
-@router.delete("/api/campaigns/{camp_id}", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")])
-async def delete_campaign(camp_id: int, user: auth.CurrentUser):
+@router.delete(
+    "/api/campaigns/{camp_id}",
+    dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")],
+)
+async def delete_campaign(camp_id: int, user: auth.CurrentUser) -> dict[str, Any]:
     all_ok, permitted = _scope(user, "manage")
     await db.execute("delete-campaigns", [camp_id], "", all_ok, permitted)
     return ok(True)
 
 
-@router.delete("/api/campaigns", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")])
-async def delete_campaigns(user: auth.CurrentUser, id: list[int] = Query(default=[])):
+@router.delete(
+    "/api/campaigns", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")]
+)
+async def delete_campaigns(
+    user: auth.CurrentUser, id: list[int] = Query(default=[])
+) -> dict[str, Any]:
     if not id:
         raise bad_request("no IDs given")
     all_ok, permitted = _scope(user, "manage")
@@ -287,20 +315,29 @@ async def _render_preview(
     return await tmpl.render_campaign_preview(camp, sub)
 
 
-@router.get("/api/campaigns/{camp_id}/preview", dependencies=[auth.require("campaigns:get", "campaigns:get_all")])
-async def preview_campaign(camp_id: int):
+@router.get(
+    "/api/campaigns/{camp_id}/preview",
+    dependencies=[auth.require("campaigns:get", "campaigns:get_all")],
+)
+async def preview_campaign(camp_id: int) -> Response:
     return HTMLResponse(await _render_preview(camp_id))
 
 
-@router.post("/api/campaigns/{camp_id}/preview", dependencies=[auth.require("campaigns:get", "campaigns:get_all")])
-async def preview_campaign_body(camp_id: int, payload: PreviewPayload):
+@router.post(
+    "/api/campaigns/{camp_id}/preview",
+    dependencies=[auth.require("campaigns:get", "campaigns:get_all")],
+)
+async def preview_campaign_body(camp_id: int, payload: PreviewPayload) -> Response:
     return HTMLResponse(
         await _render_preview(camp_id, payload.body, payload.content_type, payload.template_id)
     )
 
 
-@router.post("/api/campaigns/{camp_id}/preview/archive", dependencies=[auth.require("campaigns:get", "campaigns:get_all")])
-async def preview_campaign_archive(camp_id: int, payload: PreviewPayload):
+@router.post(
+    "/api/campaigns/{camp_id}/preview/archive",
+    dependencies=[auth.require("campaigns:get", "campaigns:get_all")],
+)
+async def preview_campaign_archive(camp_id: int, payload: PreviewPayload) -> Response:
     return HTMLResponse(
         await _render_preview(
             camp_id, payload.body, payload.content_type, payload.template_id, archive=True
@@ -308,8 +345,11 @@ async def preview_campaign_archive(camp_id: int, payload: PreviewPayload):
     )
 
 
-@router.post("/api/campaigns/{camp_id}/text", dependencies=[auth.require("campaigns:get", "campaigns:get_all")])
-async def campaign_text(camp_id: int, payload: PreviewPayload):
+@router.post(
+    "/api/campaigns/{camp_id}/text",
+    dependencies=[auth.require("campaigns:get", "campaigns:get_all")],
+)
+async def campaign_text(camp_id: int, payload: PreviewPayload) -> dict[str, Any]:
     from app import tmpl
 
     html = await _render_preview(camp_id, payload.body, payload.content_type, payload.template_id)
@@ -320,8 +360,13 @@ class TestPayload(CampaignPayload):
     subscribers: list[str] = []
 
 
-@router.post("/api/campaigns/{camp_id}/test", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")])
-async def test_campaign(camp_id: int, payload: TestPayload, user: auth.CurrentUser):
+@router.post(
+    "/api/campaigns/{camp_id}/test",
+    dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")],
+)
+async def test_campaign(
+    camp_id: int, payload: TestPayload, user: auth.CurrentUser
+) -> dict[str, Any]:
     if not payload.subscribers:
         raise bad_request("no test subscriber emails given")
     from app import manager
@@ -334,8 +379,17 @@ async def test_campaign(camp_id: int, payload: TestPayload, user: auth.CurrentUs
     # Save the incoming changes first (same as upstream), then send tests.
     await update_campaign(camp_id, payload, user)
     camp = await db.fetchrow("get-campaign-for-preview", camp_id, 0)
+    if not camp:
+        raise not_found("campaign not found")
     for sub in subs:
-        await manager.send_test_message(camp, sub)
+        try:
+            await manager.send_test_message(camp, sub)
+        except Exception as e:
+            # A misconfigured SMTP server used to escape as a bare 500, so the
+            # editor could only say "Could not send the test". Surface the real
+            # reason the same way the SMTP settings test does.
+            log.warning("campaign %d test send to %s failed: %s", camp_id, sub["email"], e)
+            raise bad_request(f"could not send to {sub['email']}: {e}") from None
     return ok(True)
 
 
@@ -344,8 +398,11 @@ class ContentPayload(BaseModel):
     body: str
 
 
-@router.post("/api/campaigns/{camp_id}/content", dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")])
-async def convert_campaign_content(camp_id: int, payload: ContentPayload):
+@router.post(
+    "/api/campaigns/{camp_id}/content",
+    dependencies=[auth.require("campaigns:manage", "campaigns:manage_all")],
+)
+async def convert_campaign_content(camp_id: int, payload: ContentPayload) -> dict[str, Any]:
     """Convert campaign body between richtext/html/markdown/plain."""
     from app import tmpl
 
@@ -377,20 +434,22 @@ def _looks_like_html(s: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/campaigns/analytics/{atype}", dependencies=[auth.require("campaigns:get_analytics")])
+@router.get(
+    "/api/campaigns/analytics/{atype}", dependencies=[auth.require("campaigns:get_analytics")]
+)
 async def campaign_analytics(
     atype: str,
     id: list[int] = Query(default=[]),
     from_: str = Query(default="", alias="from"),
     to: str = Query(default=""),
-):
+) -> dict[str, Any]:
     if not id:
         raise bad_request("no campaign IDs given")
     try:
-        frm = datetime.fromisoformat(from_) if from_ else datetime.now(timezone.utc) - timedelta(days=7)
-        until = datetime.fromisoformat(to) if to else datetime.now(timezone.utc)
-    except ValueError:
-        raise bad_request("invalid from/to dates")
+        frm = datetime.fromisoformat(from_) if from_ else datetime.now(UTC) - timedelta(days=7)
+        until = datetime.fromisoformat(to) if to else datetime.now(UTC)
+    except ValueError as e:
+        raise bad_request("invalid from/to dates") from e
     # asyncpg wants naive timestamps for ::TIMESTAMP params.
     frm, until = frm.replace(tzinfo=None), until.replace(tzinfo=None)
 
@@ -398,7 +457,10 @@ async def campaign_analytics(
 
     if atype in ("views", "clicks"):
         table = "campaign_views" if atype == "views" else "link_clicks"
-        name = "get-campaign-analytics-unique-counts" if individual else "get-campaign-analytics-counts"
+        name = (
+        "get-campaign-analytics-unique-counts" if individual
+        else "get-campaign-analytics-counts"
+    )
         sql = db.q(name).replace("%s", table)
         return ok(await db.fetch(sql, id, frm, until))
     if atype == "bounces":
