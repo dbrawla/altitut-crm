@@ -67,6 +67,8 @@ services:
       TZ: Etc/UTC
       ADMIN_USERNAME: ${LISTMONK_ADMIN_USER:-listmonk}        # The admin user is seeded automatically on first start
       ADMIN_PASSWORD: ${LISTMONK_ADMIN_PASSWORD:-listmonk}    # with these credentials. Change them in production.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}  # Set true when serving over HTTPS so the session
+                                                              # cookie is never sent over plain HTTP.
     volumes:
       - ./uploads:/listmonk/uploads:rw                        # Mount an uploads directory on the host to /listmonk/uploads inside the container.
                                                               # To use this, change directory path in Admin -> Settings -> Media to /listmonk/uploads

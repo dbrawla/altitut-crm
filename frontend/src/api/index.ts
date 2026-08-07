@@ -193,10 +193,13 @@ export const campaigns = {
       .then(data),
   delete: (id: number) =>
     http.delete<OkResponse<boolean>>(`/api/campaigns/${id}`).then(data),
+  /** Returns the rendered HTML itself. Unlike the template preview, this
+   *  endpoint replies with a raw HTMLResponse, not an {ok, data} envelope —
+   *  unwrapping it with data() yields undefined. */
   preview: (id: number) =>
     http
-      .get<OkResponse<{ body: string; subject: string }>>(`/api/campaigns/${id}/preview`)
-      .then(data),
+      .get<string>(`/api/campaigns/${id}/preview`, { responseType: 'text' })
+      .then((res) => res.data),
   getRunningStats: () =>
     http.get<OkResponse<Campaign[]>>('/api/campaigns/running/stats').then(data),
   deleteMultiple: (ids: number[]) =>

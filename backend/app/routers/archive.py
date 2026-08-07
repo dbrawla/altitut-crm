@@ -8,7 +8,7 @@ values instead of leaking a real subscriber.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import format_datetime
 from typing import Any
 from xml.sax.saxutils import escape
@@ -49,7 +49,7 @@ def _archive_sub(camp: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-async def _fetch_archives(pg: Pagination, render_body: bool) -> tuple[list[dict], int]:
+async def _fetch_archives(pg: Pagination, render_body: bool) -> tuple[list[dict[str, Any]], int]:
     rows = await db.fetch("get-archived-campaigns", pg.offset, pg.limit, "archive")
     total = rows[0]["total"] if rows else 0
 
@@ -79,14 +79,14 @@ async def _fetch_archives(pg: Pagination, render_body: bool) -> tuple[list[dict]
 
 
 @router.get("/api/public/archive")
-async def api_archive(pg: Pagination = Depends()):
+async def api_archive(pg: Pagination = Depends()) -> dict[str, Any]:
     _enabled()
     results, total = await _fetch_archives(pg, render_body=False)
     return ok(pg.results(results, total))
 
 
 @router.get("/archive")
-async def archive_page(pg: Pagination = Depends()):
+async def archive_page(pg: Pagination = Depends()) -> Response:
     _enabled()
     results, total = await _fetch_archives(pg, render_body=False)
     site = settings.get("app.site_name") or "listmonk"
@@ -96,7 +96,9 @@ async def archive_page(pg: Pagination = Depends()):
     else:
         items = "".join(
             f'<li><a href="{escape(c["url"])}">{escape(c["subject"])}</a>'
-            f'<span class="date">{(c["send_at"] or c["created_at"]).strftime("%d %b %Y")}</span></li>'
+            f'<span class="date">'
+            f'{(c["send_at"] or c["created_at"]).strftime("%d %b %Y")}'
+            "</span></li>"
             for c in results
         )
         items = f"<ul class='archive'>{items}</ul>"
@@ -134,7 +136,7 @@ async def archive_page(pg: Pagination = Depends()):
 
 
 @router.get("/archive.xml")
-async def archive_feed(request: Request, pg: Pagination = Depends()):
+async def archive_feed(request: Request, pg: Pagination = Depends()) -> Response:
     _enabled()
     full = settings.get("app.enable_public_archive_rss_content", False)
     results, _ = await _fetch_archives(pg, render_body=bool(full))
@@ -144,7 +146,7 @@ async def archive_feed(request: Request, pg: Pagination = Depends()):
 
     items = []
     for c in results:
-        pub = c["send_at"] or c["created_at"] or datetime.now(timezone.utc)
+        pub = c["send_at"] or c["created_at"] or datetime.now(UTC)
         body = f"<content:encoded><![CDATA[{c['content']}]]></content:encoded>" if full else ""
         items.append(
             f"<item><title>{escape(c['subject'])}</title>"
@@ -165,7 +167,7 @@ async def archive_feed(request: Request, pg: Pagination = Depends()):
 
 
 @router.get("/archive/latest")
-async def archive_latest():
+async def archive_latest() -> Response:
     """Registered before /archive/{id} so 'latest' isn't treated as a slug."""
     _enabled()
     rows = await db.fetch("get-archived-campaigns", 0, 1, "archive")
@@ -177,7 +179,7 @@ async def archive_latest():
 
 
 @router.get("/archive/{ident}")
-async def archive_campaign(ident: str):
+async def archive_campaign(ident: str) -> Response:
     """`ident` is either the campaign UUID or its custom archive slug."""
     _enabled()
     from app.routers.public import _RE_UUID

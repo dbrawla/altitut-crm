@@ -89,30 +89,37 @@ def q(name: str) -> str:
     return queries[name]
 
 
+def _pool() -> asyncpg.Pool:
+    """The connection pool, or a clear error if connect() has not run yet.
+
+    This was `assert pool`, which `python -O` strips — leaving an opaque
+    AttributeError on None instead of saying what actually went wrong.
+    """
+    if pool is None:
+        raise RuntimeError("database pool is not initialised; db.connect() has not run")
+    return pool
+
+
 # --- Thin fetch helpers (records -> dicts for JSON responses) ---------------
 
 
 async def fetch(name_or_sql: str, *args: Any) -> list[dict[str, Any]]:
     sql = queries.get(name_or_sql, name_or_sql)
-    assert pool
-    rows = await pool.fetch(sql, *args)
+    rows = await _pool().fetch(sql, *args)
     return [dict(r) for r in rows]
 
 
 async def fetchrow(name_or_sql: str, *args: Any) -> dict[str, Any] | None:
     sql = queries.get(name_or_sql, name_or_sql)
-    assert pool
-    row = await pool.fetchrow(sql, *args)
+    row = await _pool().fetchrow(sql, *args)
     return dict(row) if row else None
 
 
 async def fetchval(name_or_sql: str, *args: Any) -> Any:
     sql = queries.get(name_or_sql, name_or_sql)
-    assert pool
-    return await pool.fetchval(sql, *args)
+    return await _pool().fetchval(sql, *args)
 
 
 async def execute(name_or_sql: str, *args: Any) -> str:
     sql = queries.get(name_or_sql, name_or_sql)
-    assert pool
-    return await pool.execute(sql, *args)
+    return str(await _pool().execute(sql, *args))

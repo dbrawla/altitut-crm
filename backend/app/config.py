@@ -9,6 +9,8 @@ original listmonk.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -38,6 +40,12 @@ class Env(BaseSettings):
     # Session cookie
     session_cookie_name: str = "listmonk_session"
     session_max_age: int = 86400 * 7  # seconds
+    # Send the session cookie over HTTPS only. Defaults off so plain-HTTP local
+    # development keeps working; set SESSION_COOKIE_SECURE=true behind TLS.
+    session_cookie_secure: bool = False
+    # "lax" is right for a same-origin admin app. "strict" if you never link in
+    # from elsewhere; "none" requires session_cookie_secure.
+    session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
 
     # Firestore (migration target — service account key path, gitignored)
     firebase_credentials_path: str = "firebase-credentials.json"

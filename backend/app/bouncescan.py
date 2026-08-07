@@ -11,6 +11,7 @@ poplib/imaplib are blocking, so each scan runs in a worker thread.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import email
 import email.policy
 import logging
@@ -49,7 +50,7 @@ _RE_HARD = re.compile(
 
 _RE_COMPLAINT = re.compile(r"(?i)(feedback-type:\s*abuse|this is an abuse report|complaint)")
 
-_task: asyncio.Task | None = None
+_task: asyncio.Task[None] | None = None
 
 
 def classify(raw: bytes) -> tuple[str, str]:
@@ -66,8 +67,8 @@ def classify(raw: bytes) -> tuple[str, str]:
         if status.startswith("4"):
             return "soft", f"smtp_status={status}"
 
-    if m := _RE_HARD.search(text):
-        return "hard", f"body_match={m.group(1)}"
+    if hard := _RE_HARD.search(text):
+        return "hard", f"body_match={hard.group(1)}"
 
     return "soft", "default"
 
@@ -82,7 +83,7 @@ def parse_message(raw: bytes) -> dict[str, Any] | None:
 
     text = raw.decode("utf-8", "replace")
 
-    def find(header: str, pattern: re.Pattern) -> str:
+    def find(header: str, pattern: re.Pattern[str]) -> str:
         v = msg.get(header)
         if v:
             return str(v).strip()
@@ -159,10 +160,9 @@ def _fetch_pop(box: dict[str, Any]) -> list[bytes]:
                 log.warning("error retrieving bounce message %d", i, exc_info=True)
         return out
     finally:
-        try:
+        # Best-effort teardown: the socket is going away either way.
+        with contextlib.suppress(Exception):
             conn.quit()  # commits the DELEs
-        except Exception:
-            pass
 
 
 def _fetch_imap(box: dict[str, Any]) -> list[bytes]:
@@ -183,7 +183,8 @@ def _fetch_imap(box: dict[str, Any]) -> list[bytes]:
         ids = (data[0] or b"").split()[:MAX_PER_SCAN]
 
         out: list[bytes] = []
-        for i in ids:
+        for raw_id in ids:
+            i = raw_id.decode() if isinstance(raw_id, bytes) else str(raw_id)
             typ, msg_data = conn.fetch(i, "(RFC822)")
             if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
                 continue
@@ -192,10 +193,9 @@ def _fetch_imap(box: dict[str, Any]) -> list[bytes]:
         conn.expunge()
         return out
     finally:
-        try:
+        # Best-effort teardown: the socket is going away either way.
+        with contextlib.suppress(Exception):
             conn.logout()
-        except Exception:
-            pass
 
 
 async def scan_once(box: dict[str, Any]) -> int:
@@ -260,6 +260,8 @@ async def stop() -> None:
         _task.cancel()
         try:
             await _task
-        except (asyncio.CancelledError, Exception):
-            pass
+        except asyncio.CancelledError:
+            pass  # expected: we just cancelled it
+        except Exception:
+            log.exception("bounce scanner raised while stopping")
         _task = None

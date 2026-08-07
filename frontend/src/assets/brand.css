@@ -115,3 +115,78 @@ a:focus-visible {
 .level .level-right .o-btn + .o-btn {
   margin-left: 0.5rem;
 }
+
+/* ── Modal fix ────────────────────────────────────────────────────────────────
+   Oruga renders .o-modal inside .main-content (margin-left:240px), so the
+   overlay is offset and the card appears left-anchored. We fix this by making
+   the overlay and card position:fixed over the full viewport.
+
+   IMPORTANT: do NOT set display:flex !important on .o-modal — Oruga uses
+   v-show (display:none) to hide the modal on close and !important would
+   override that, trapping the modal open. Instead we center the card directly
+   with position:fixed + transform. */
+
+/* 1. Wrapper: full-viewport fixed, above sidebar (z 100) and topbar (z 50).
+      No display override — Oruga's v-show must remain in control.
+
+      `background: transparent` is load-bearing: main.css also defines `.modal`,
+      but as the custom shell's white *card* (see the class collision noted in
+      CLAUDE.md). Without this the wrapper paints an opaque white sheet over the
+      whole viewport. */
+.o-modal,
+.modal {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 500 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  max-width: none !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+/* 2. Dimmed backdrop */
+.o-modal__overlay,
+.modal-background {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  background: rgba(0, 0, 0, 0.55) !important;
+  backdrop-filter: blur(3px) !important;
+  z-index: 500 !important;
+}
+
+/* 3. Card: centered via fixed positioning + transform. Sits above the backdrop.
+
+   Only the OUTER box gets this. `.modal-card` is a child of `.modal-content` —
+   giving both `position:fixed` collapses the parent to height 0, and because the
+   parent is also transformed it becomes the containing block for its fixed child
+   and clips it away. The modal then renders invisible and unclickable. */
+.o-modal__content,
+.modal-content {
+  position: fixed !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  z-index: 501 !important;
+  max-width: 560px !important;
+  width: 90vw !important;
+  max-height: 90vh !important;
+  overflow-y: auto !important;
+  border-radius: 12px !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35) !important;
+  margin: 0 !important;
+}
+
+/* 4. Bulma gives .modal-card a fixed 640px width, which overflows the 560px
+      wrapper above and gets clipped (losing the Save button). Let it fill. */
+.modal-card {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+}

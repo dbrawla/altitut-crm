@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import AsyncGenerator
+from typing import Any
 
 from fastapi import APIRouter, Form, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app import auth, db
 from app.utils import bad_request, ok
@@ -38,7 +39,7 @@ def _parse_ts(value: str | None, field: str) -> datetime:
     "/api/maintenance/subscribers/{gc_type}",
     dependencies=[auth.require("settings:maintain")],
 )
-async def gc_subscribers(gc_type: str):
+async def gc_subscribers(gc_type: str) -> dict[str, Any]:
     """Delete blocklisted or orphaned (list-less) subscribers."""
     if gc_type == "blocklisted":
         tag = await db.execute("delete-blocklisted-subscribers")
@@ -56,7 +57,7 @@ async def gc_subscribers(gc_type: str):
     "/api/maintenance/subscriptions/unconfirmed",
     dependencies=[auth.require("settings:maintain")],
 )
-async def gc_subscriptions(before_date: str = Form(default="")):
+async def gc_subscriptions(before_date: str = Form(default="")) -> dict[str, Any]:
     """Delete unconfirmed subscriptions to double opt-in lists before a date."""
     ts = _parse_ts(before_date, "before_date")
     tag = await db.execute("delete-unconfirmed-subscriptions", ts)
@@ -68,7 +69,7 @@ async def gc_subscriptions(before_date: str = Form(default="")):
     "/api/maintenance/analytics/{gc_type}",
     dependencies=[auth.require("settings:maintain")],
 )
-async def gc_analytics(gc_type: str, before_date: str = Form(default="")):
+async def gc_analytics(gc_type: str, before_date: str = Form(default="")) -> dict[str, Any]:
     """Delete campaign view and/or link-click records before a date."""
     ts = _parse_ts(before_date, "before_date")
     if gc_type == "all":
@@ -101,7 +102,7 @@ _EXPORTS = {
     "/api/maintenance/analytics/{export_type}/export",
     dependencies=[auth.require("settings:maintain")],
 )
-async def export_analytics(export_type: str, since: str = Query(default="")):
+async def export_analytics(export_type: str, since: str = Query(default="")) -> Response:
     """Stream campaign analytics as CSV, paged so a big table never loads at once."""
     if export_type not in _EXPORTS:
         raise bad_request("invalid type; expected 'views' or 'clicks'")

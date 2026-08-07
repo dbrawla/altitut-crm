@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -14,12 +16,12 @@ _TYPES = {"campaign", "campaign_visual", "tx"}
 
 
 @router.get("/api/templates", dependencies=[auth.require("templates:get")])
-async def get_templates(no_body: bool = False):
+async def get_templates(no_body: bool = False) -> dict[str, Any]:
     return ok(await db.fetch("get-templates", 0, no_body, ""))
 
 
 @router.get("/api/templates/{tpl_id}", dependencies=[auth.require("templates:get")])
-async def get_template(tpl_id: int):
+async def get_template(tpl_id: int) -> dict[str, Any]:
     rows = await db.fetch("get-templates", tpl_id, False, "")
     if not rows:
         raise not_found("template not found")
@@ -27,7 +29,7 @@ async def get_template(tpl_id: int):
 
 
 @router.get("/api/templates/{tpl_id}/preview", dependencies=[auth.require("templates:get")])
-async def preview_template(tpl_id: int):
+async def preview_template(tpl_id: int) -> dict[str, Any]:
     rows = await db.fetch("get-templates", tpl_id, False, "")
     if not rows:
         raise not_found("template not found")
@@ -38,7 +40,8 @@ async def preview_template(tpl_id: int):
         "name": "Sample campaign",
         "subject": "Sample campaign subject",
         "from_email": "noreply@yoursite.com",
-        "body": "<p>Hello there!</p><p>This is a sample campaign body rendered into the template.</p>",
+        "body": "<p>Hello there!</p>"
+        "<p>This is a sample campaign body rendered into the template.</p>",
         "content_type": "html",
         "template_body": t["body"],
     }
@@ -53,7 +56,7 @@ class PreviewBody(BaseModel):
 
 
 @router.post("/api/templates/preview", dependencies=[auth.require("templates:get")])
-async def preview_template_body(payload: PreviewBody):
+async def preview_template_body(payload: PreviewBody) -> dict[str, Any]:
     """Preview an unsaved template body straight from the editor."""
     if not payload.body.strip():
         raise bad_request("empty template body")
@@ -63,7 +66,8 @@ async def preview_template_body(payload: PreviewBody):
         "name": "Sample campaign",
         "subject": "Sample campaign subject",
         "from_email": "noreply@yoursite.com",
-        "body": "<p>Hello there!</p><p>This is a sample campaign body rendered into the template.</p>",
+        "body": "<p>Hello there!</p>"
+        "<p>This is a sample campaign body rendered into the template.</p>",
         "content_type": "html",
         "template_body": payload.body,
     }
@@ -85,7 +89,7 @@ class TemplatePayload(BaseModel):
 
 
 @router.post("/api/templates", dependencies=[auth.require("templates:manage")])
-async def create_template(payload: TemplatePayload):
+async def create_template(payload: TemplatePayload) -> dict[str, Any]:
     if not payload.name.strip():
         raise bad_request("invalid template name")
     if payload.type not in _TYPES:
@@ -98,7 +102,7 @@ async def create_template(payload: TemplatePayload):
 
 
 @router.put("/api/templates/{tpl_id}", dependencies=[auth.require("templates:manage")])
-async def update_template(tpl_id: int, payload: TemplatePayload):
+async def update_template(tpl_id: int, payload: TemplatePayload) -> dict[str, Any]:
     await db.execute(
         "update-template", tpl_id, payload.name.strip(), payload.subject,
         payload.body, payload.body_source or "",
@@ -110,7 +114,7 @@ async def update_template(tpl_id: int, payload: TemplatePayload):
 
 
 @router.put("/api/templates/{tpl_id}/default", dependencies=[auth.require("templates:manage")])
-async def set_default_template(tpl_id: int):
+async def set_default_template(tpl_id: int) -> dict[str, Any]:
     rows = await db.fetch("get-templates", tpl_id, True, "")
     if not rows:
         raise not_found("template not found")
@@ -121,7 +125,7 @@ async def set_default_template(tpl_id: int):
 
 
 @router.delete("/api/templates/{tpl_id}", dependencies=[auth.require("templates:manage")])
-async def delete_template(tpl_id: int):
+async def delete_template(tpl_id: int) -> dict[str, Any]:
     deleted = await db.fetchval("delete-template", tpl_id)
     if not deleted:
         # The query refuses to delete the default or the last remaining template.

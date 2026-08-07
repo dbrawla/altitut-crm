@@ -13,7 +13,7 @@ import hmac
 import secrets
 from typing import Annotated, Any
 
-from fastapi import Cookie, Depends, Header, HTTPException, Request, status
+from fastapi import Cookie, Depends, Header, HTTPException, Request, params, status
 
 from app import db
 from app.config import env
@@ -33,18 +33,21 @@ async def create_session(user_id: int) -> str:
     await db.execute(
         "INSERT INTO sessions (id, data) VALUES ($1, $2)", sid, {"user_id": user_id}
     )
-    # Opportunistically prune expired sessions.
+    # Opportunistically prune expired sessions. The age is bound as a parameter
+    # rather than interpolated, so the SQL text is constant.
     await db.execute(
-        f"DELETE FROM sessions WHERE created_at < NOW() - INTERVAL '{env.session_max_age} seconds'"
+        "DELETE FROM sessions WHERE created_at < NOW() - ($1 * INTERVAL '1 second')",
+        env.session_max_age,
     )
     return sid
 
 
 async def get_session_user_id(sid: str) -> int | None:
     row = await db.fetchrow(
-        f"""SELECT data FROM sessions WHERE id=$1
-            AND created_at >= NOW() - INTERVAL '{env.session_max_age} seconds'""",
+        """SELECT data FROM sessions WHERE id=$1
+            AND created_at >= NOW() - ($2 * INTERVAL '1 second')""",
         sid,
+        env.session_max_age,
     )
     return row["data"].get("user_id") if row else None
 
@@ -98,7 +101,7 @@ async def get_user(
 
 
 def is_super(user: User) -> bool:
-    return user["user_role"]["id"] == SUPER_ADMIN_ROLE_ID
+    return bool(user["user_role"]["id"] == SUPER_ADMIN_ROLE_ID)
 
 
 def has_perm(user: User, *perms: str) -> bool:
@@ -139,8 +142,10 @@ async def current_user(
 
                 try:
                     rest = base64.b64decode(rest).decode()
-                except Exception:
-                    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
+                except Exception as e:
+                    raise HTTPException(
+                        status.HTTP_401_UNAUTHORIZED, "invalid token"
+                    ) from e
             api_user, _, token = rest.partition(":")
             u = await db.fetchrow("get-user", 0, api_user.strip(), "")
             if (
@@ -159,24 +164,25 @@ async def current_user(
     if not session_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
     data = await db.fetchrow(
-        f"""SELECT data FROM sessions WHERE id=$1
-            AND created_at >= NOW() - INTERVAL '{env.session_max_age} seconds'""",
+        """SELECT data FROM sessions WHERE id=$1
+            AND created_at >= NOW() - ($2 * INTERVAL '1 second')""",
         session_id,
+        env.session_max_age,
     )
     if not data or not data["data"].get("user_id") or data["data"].get("pre_2fa"):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "session expired or invalid")
 
-    user = await get_user(user_id=data["data"]["user_id"])
-    if not user or user["status"] != "enabled":
+    session_user = await get_user(user_id=data["data"]["user_id"])
+    if not session_user or session_user["status"] != "enabled":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user not found or disabled")
-    request.state.user = user
-    return user
+    request.state.user = session_user
+    return session_user
 
 
 CurrentUser = Annotated[User, Depends(current_user)]
 
 
-def require(*perms: str):
+def require(*perms: str) -> params.Depends:
     """Dependency factory: the user needs at least one of the permissions."""
 
     async def _check(user: CurrentUser) -> User:
@@ -186,4 +192,5 @@ def require(*perms: str):
             )
         return user
 
-    return Depends(_check)
+    dep: params.Depends = Depends(_check)
+    return dep

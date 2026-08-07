@@ -63,6 +63,45 @@ packages = ["app"]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+# Pinned explicitly: ruff's implicit default set drifts between releases, which
+# made the reported error count depend on whichever version you happened to have.
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import sorting
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "C4",       # comprehensions
+    "SIM",      # simplify
+    "DTZ",      # naive datetimes
+    "BLE",      # blind except
+    "S",        # bandit
+    "RUF",
+]
+ignore = [
+    "B008",  # FastAPI puts Depends()/Query()/Header() in argument defaults by design
+    "S105",  # "possible hardcoded password" fires on token/permission name constants
+    # `except Exception` at a request/worker/teardown boundary is deliberate here:
+    # one bad row, template or mailbox must not take down the send loop or the
+    # request. Every such site either logs or documents why it stays silent — if
+    # you add one that does neither, that is the bug, not the bare Exception.
+    "BLE001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test_*.py" = ["S101"]  # asserts are the point of a test
+# tmpl.py is the HTML email renderer, so marking rendered content safe with
+# Markup (S704) is its whole job. Its `if __name__ == "__main__"` block is an
+# assert-based self-check for the Go->Jinja translator and never runs served.
+"app/tmpl.py" = ["S101", "S704", "E501"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+# These ship no type information (no py.typed, no stubs on PyPI). Untyped at the
+# boundary is the honest state; everything on our side of it is still checked.
+[[tool.mypy.overrides]]
+module = ["asyncpg.*", "aiofiles.*", "aiosmtplib.*", "qrcode.*", "markdown.*", "slugify.*"]
+ignore_missing_imports = true

@@ -45,10 +45,30 @@ source of truth for the DB schema and are useful when writing backend SQL.
 
 ## Conventions
 
-- Backend: `ruff` + `mypy --strict` (config in `pyproject.toml`, line length 100). Tests with
-  `pytest` (`backend/test_*.py`). New env/config → `app/config.py`.
-- Frontend: `npm run lint`, `npm run type-check` (vue-tsc). Match existing view structure.
-- Don't commit secrets. Default admin `listmonk`/`listmonk` is for local only.
+All four gates are green — keep them that way.
+
+- Backend: `ruff check app` and `mypy --strict app` both pass. `pytest` (`backend/test_*.py`),
+  20 tests. New env/config → `app/config.py`.
+  The prod image ships runtime deps only, so `scripts/backend-checks.ps1` installs the dev
+  tools into the running container and runs all three.
+  `[tool.ruff.lint].select` is pinned explicitly — ruff's implicit default set drifts between
+  releases, which made the error count depend on your local version. The `ignore` entries each
+  carry their rationale; `BLE001` is off because boundary `except Exception` is deliberate here,
+  but every such site must still log or say why it doesn't.
+- Frontend: `npm run lint` (ESLint 9 flat config in `eslint.config.mjs`) and `npm run type-check`
+  (vue-tsc), both clean.
+- E2E: `cd e2e && npm test` (Playwright, headless, needs the stack up), 27 tests. Add a spec
+  there for any UI regression — several past ones were invisible to unit tests and type-check.
+- Don't commit secrets. Default admin `listmonk`/`listmonk` is for local only. Set
+  `SESSION_COOKIE_SECURE=true` behind TLS.
+
+## Oruga component names (0.13)
+
+Check a component exists before using it — Vue renders an unregistered tag as an inert unknown
+element with **no error**, so the field simply isn't there. `<o-inputitems>` was used in 7
+places and does not exist in 0.13; `<o-taginput>` does exist but its internal input never picks
+up typing unless the parent drives it. Comma-separated list fields use
+`src/components/ListInput.vue` instead.
 
 ---
 

@@ -6,6 +6,7 @@ import base64
 import io
 import secrets
 import time
+from typing import Any
 
 from fastapi import APIRouter, Cookie, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -28,7 +29,8 @@ def _set_session_cookie(response: Response, sid: str) -> None:
         value=sid,
         max_age=env.session_max_age,
         httponly=True,
-        samesite="lax",
+        secure=env.session_cookie_secure,
+        samesite=env.session_cookie_samesite,
         path="/",
     )
 
@@ -39,7 +41,7 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/api/login")
-async def login(payload: LoginRequest, response: Response):
+async def login(payload: LoginRequest, response: Response) -> dict[str, Any]:
     # Password verification happens in Postgres via CRYPT(), like the original.
     user = await db.fetchrow("login-user", payload.username.strip(), payload.password)
     if not user:
@@ -69,7 +71,7 @@ async def login_twofa(
     payload: TotpRequest,
     response: Response,
     session_id: str | None = Cookie(default=None, alias=env.session_cookie_name),
-):
+) -> dict[str, Any]:
     if not session_id:
         raise HTTPException(status_code=401, detail="not authenticated")
     row = await db.fetchrow("SELECT data FROM sessions WHERE id=$1", session_id)
@@ -98,10 +100,17 @@ async def logout(
     response: Response,
     user: auth.CurrentUser,
     session_id: str | None = Cookie(default=None, alias=env.session_cookie_name),
-):
+) -> dict[str, Any]:
     if session_id:
         await auth.delete_session(session_id)
-    response.delete_cookie(env.session_cookie_name, path="/")
+    # Flags must match those used when setting it, or the browser keeps the cookie.
+    response.delete_cookie(
+        env.session_cookie_name,
+        path="/",
+        httponly=True,
+        secure=env.session_cookie_secure,
+        samesite=env.session_cookie_samesite,
+    )
     return ok(True)
 
 
@@ -111,7 +120,7 @@ async def logout(
 
 
 @router.get("/api/profile")
-async def get_profile(user: auth.CurrentUser):
+async def get_profile(user: auth.CurrentUser) -> dict[str, Any]:
     return ok(user)
 
 
@@ -127,7 +136,7 @@ async def update_profile(
     payload: ProfileUpdate,
     user: auth.CurrentUser,
     session_id: str | None = Cookie(default=None, alias=env.session_cookie_name),
-):
+) -> dict[str, Any]:
     if payload.password and payload.password != (payload.password2 or payload.password):
         raise bad_request("passwords do not match")
     await db.execute(
@@ -202,7 +211,7 @@ async def forgot_submit(request: Request, email: str = Form(default="")) -> HTML
     return _auth_page("Reset password", _SENT_MSG)
 
 
-async def _valid_reset(token: str, email: str) -> dict | None:
+async def _valid_reset(token: str, email: str) -> dict[str, Any] | None:
     """Return the user if (email, token) is a live reset request."""
     if not token or not email:
         return None
@@ -224,8 +233,10 @@ def _reset_form(token: str, email: str, error: str = "") -> HTMLResponse:
         f"{err}<form method=\"post\">"
         f'<input type="hidden" name="token" value="{escape(token)}">'
         f'<input type="hidden" name="email" value="{escape(email)}">'
-        '<label>New password <input type="password" name="password" required style="width:100%"></label>'
-        '<label>Repeat password <input type="password" name="password2" required style="width:100%"></label>'
+        '<label>New password <input type="password" name="password"'
+        ' required style="width:100%"></label>'
+        '<label>Repeat password <input type="password" name="password2"'
+        ' required style="width:100%"></label>'
         '<p><button type="submit">Set password</button></p></form>',
     )
 
@@ -252,7 +263,9 @@ async def reset_submit(
         return _auth_page("Reset password", "<p>This reset link is invalid or has expired.</p>")
 
     if len(password) < MIN_PASSWORD_LEN:
-        return _reset_form(token, email, f"Password must be at least {MIN_PASSWORD_LEN} characters.")
+        return _reset_form(
+        token, email, f"Password must be at least {MIN_PASSWORD_LEN} characters."
+    )
     if password != password2:
         return _reset_form(token, email, "The passwords do not match.")
 
@@ -285,7 +298,7 @@ def _check_self_or_admin(user: auth.User, target_id: int) -> None:
 
 
 @router.get("/api/users/{user_id}/twofa/totp")
-async def get_twofa_totp(user_id: int, user: auth.CurrentUser):
+async def get_twofa_totp(user_id: int, user: auth.CurrentUser) -> dict[str, Any]:
     """Generate (but don't yet enable) a TOTP secret + QR for enrollment."""
     _check_self_or_admin(user, user_id)
     import pyotp
@@ -300,7 +313,7 @@ async def get_twofa_totp(user_id: int, user: auth.CurrentUser):
         name=target["username"], issuer_name=settings.get("app.site_name", "listmonk")
     )
     buf = io.BytesIO()
-    qrcode.make(uri).save(buf, format="PNG")
+    qrcode.make(uri).save(buf)  # PNG is the default image factory
     return ok(
         {
             "secret": secret,
@@ -316,7 +329,7 @@ class TotpEnable(BaseModel):
 
 
 @router.put("/api/users/{user_id}/twofa")
-async def enable_twofa(user_id: int, payload: TotpEnable, user: auth.CurrentUser):
+async def enable_twofa(user_id: int, payload: TotpEnable, user: auth.CurrentUser) -> dict[str, Any]:
     _check_self_or_admin(user, user_id)
     import pyotp
 
@@ -327,7 +340,7 @@ async def enable_twofa(user_id: int, payload: TotpEnable, user: auth.CurrentUser
 
 
 @router.delete("/api/users/{user_id}/twofa")
-async def disable_twofa(user_id: int, user: auth.CurrentUser):
+async def disable_twofa(user_id: int, user: auth.CurrentUser) -> dict[str, Any]:
     _check_self_or_admin(user, user_id)
     await db.execute("set-user-twofa", user_id, "none", None)
     return ok(True)
@@ -342,25 +355,26 @@ async def disable_twofa(user_id: int, user: auth.CurrentUser):
 _oidc_states: dict[str, float] = {}
 
 
-def _oidc_cfg() -> dict:
+def _oidc_cfg() -> dict[str, Any]:
     cfg = settings.get("security.oidc") or {}
     if not cfg.get("enabled"):
         raise HTTPException(status_code=400, detail="OIDC is not enabled")
     return cfg
 
 
-async def _oidc_provider_meta(provider_url: str) -> dict:
+async def _oidc_provider_meta(provider_url: str) -> dict[str, Any]:
     import httpx
 
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.get(provider_url.rstrip("/") + "/.well-known/openid-configuration")
         r.raise_for_status()
-        return r.json()
+        meta: dict[str, Any] = r.json()
+        return meta
 
 
 @router.get("/auth/oidc")
 @router.post("/auth/oidc")
-async def oidc(request: Request):
+async def oidc(request: Request) -> Response:
     cfg = _oidc_cfg()
     root_url = settings.get("app.root_url", "").rstrip("/")
     redirect_uri = f"{root_url}/auth/oidc"

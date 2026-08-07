@@ -8,8 +8,10 @@ offers `s3`. ponytail: add an S3 branch in _store()/_delete() with aiobotocore
 from __future__ import annotations
 
 import io
+import logging
 import uuid as uuidlib
 from pathlib import Path
+from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, UploadFile
@@ -18,6 +20,7 @@ from app import auth, settings
 from app.repos import media_repo
 from app.utils import Pagination, bad_request, not_found, ok
 
+log = logging.getLogger("listmonk")
 router = APIRouter(tags=["media"])
 
 # Raster types we can safely generate a thumbnail for.
@@ -36,7 +39,7 @@ def _uri(filename: str) -> str:
     return f"{base}/{filename}"
 
 
-def _shape(row: dict) -> dict:
+def _shape(row: dict[str, Any]) -> dict[str, Any]:
     row = dict(row)
     row.pop("total", None)
     row["url"] = _uri(row["filename"])
@@ -51,14 +54,14 @@ def _safe_name(name: str) -> str:
 
 
 @router.get("/api/media", dependencies=[auth.require("media:get")])
-async def get_all_media(pg: Pagination = Depends(), query: str = ""):
+async def get_all_media(pg: Pagination = Depends(), query: str = "") -> dict[str, Any]:
     provider = settings.get("upload.provider") or "filesystem"
     rows, total = await media_repo.query(query, provider, pg.offset, pg.limit)
     return ok(pg.results([_shape(r) for r in rows], total, query))
 
 
 @router.get("/api/media/{media_id}", dependencies=[auth.require("media:get")])
-async def get_media(media_id: int):
+async def get_media(media_id: int) -> dict[str, Any]:
     row = await media_repo.get(media_id)
     if not row:
         raise not_found("media not found")
@@ -66,7 +69,7 @@ async def get_media(media_id: int):
 
 
 @router.post("/api/media", dependencies=[auth.require("media:manage")])
-async def upload_media(file: UploadFile = File(...)):
+async def upload_media(file: UploadFile = File(...)) -> dict[str, Any]:
     exts = settings.get("upload.extensions") or []
     ext = Path(file.filename or "").suffix.lower().lstrip(".")
     if exts and "*" not in exts and ext not in [e.lower().lstrip(".") for e in exts]:
@@ -96,6 +99,8 @@ async def upload_media(file: UploadFile = File(...)):
             thumb = f"thumb_{filename}"
             img.save(directory / thumb)
         except Exception:
+            # Not fatal — the upload still succeeds, just without a thumbnail.
+            log.warning("could not thumbnail %s", filename, exc_info=True)
             thumb = ""
 
     media_id = await media_repo.insert(
@@ -107,7 +112,7 @@ async def upload_media(file: UploadFile = File(...)):
 
 
 @router.delete("/api/media/{media_id}", dependencies=[auth.require("media:manage")])
-async def delete_media(media_id: int):
+async def delete_media(media_id: int) -> dict[str, Any]:
     row = await media_repo.delete(media_id)
     if not row:
         raise not_found("media not found")

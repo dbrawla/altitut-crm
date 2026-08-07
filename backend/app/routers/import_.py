@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import orjson
 from fastapi import APIRouter, File, Form, UploadFile
 
@@ -12,21 +14,21 @@ router = APIRouter(tags=["import"])
 
 
 @router.get("/api/import/subscribers", dependencies=[auth.require("subscribers:import")])
-async def get_import_status():
+async def get_import_status() -> dict[str, Any]:
     return ok(importer.status)
 
 
 @router.get("/api/import/subscribers/logs", dependencies=[auth.require("subscribers:import")])
-async def get_import_logs():
+async def get_import_logs() -> dict[str, Any]:
     return ok("\n".join(importer.logs))
 
 
 @router.post("/api/import/subscribers", dependencies=[auth.require("subscribers:import")])
-async def start_import(params: str = Form(...), file: UploadFile = File(...)):
+async def start_import(params: str = Form(...), file: UploadFile = File(...)) -> dict[str, Any]:
     try:
         p = orjson.loads(params)
-    except Exception:
-        raise bad_request("invalid params JSON")
+    except Exception as e:
+        raise bad_request("invalid params JSON") from e
 
     mode = p.get("mode", importer.MODE_SUBSCRIBE)
     if mode not in (importer.MODE_SUBSCRIBE, importer.MODE_BLOCKLIST):
@@ -51,11 +53,11 @@ async def start_import(params: str = Form(...), file: UploadFile = File(...)):
             bool(p.get("overwrite", False)),
         )
     except ValueError as e:
-        raise bad_request(str(e))
+        raise bad_request(str(e)) from e
     return ok(importer.status)
 
 
 @router.delete("/api/import/subscribers", dependencies=[auth.require("subscribers:import")])
-async def stop_import():
+async def stop_import() -> dict[str, Any]:
     await importer.stop()
     return ok(importer.status)

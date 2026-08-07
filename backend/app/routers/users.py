@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -33,19 +34,19 @@ class UserPayload(BaseModel):
     status: str = "enabled"
 
 
-def _strip_password(u: dict) -> dict:
+def _strip_password(u: dict[str, Any]) -> dict[str, Any]:
     u.pop("password", None)
     return u
 
 
 @router.get("/api/users", dependencies=[auth.require("users:get")])
-async def get_users():
+async def get_users() -> dict[str, Any]:
     rows = await db.fetch("get-users")
     return ok([_strip_password(r) for r in rows])
 
 
 @router.get("/api/users/{user_id}", dependencies=[auth.require("users:get")])
-async def get_user(user_id: int):
+async def get_user(user_id: int) -> dict[str, Any]:
     row = await db.fetchrow("get-user", user_id, "", "")
     if not row:
         raise not_found("user not found")
@@ -67,7 +68,7 @@ def _validate(p: UserPayload, creating: bool) -> None:
 
 
 @router.post("/api/users", dependencies=[auth.require("users:manage")])
-async def create_user(payload: UserPayload):
+async def create_user(payload: UserPayload) -> dict[str, Any]:
     _validate(payload, creating=True)
 
     # API users authenticate with a generated token stored verbatim (no bcrypt).
@@ -101,7 +102,7 @@ async def create_user(payload: UserPayload):
 
 
 @router.put("/api/users/{user_id}", dependencies=[auth.require("users:manage")])
-async def update_user(user_id: int, payload: UserPayload):
+async def update_user(user_id: int, payload: UserPayload) -> dict[str, Any]:
     _validate(payload, creating=False)
 
     cur = await db.fetchrow("get-user", user_id, "", "")
@@ -144,7 +145,7 @@ async def _delete_users(ids: list[int]) -> None:
 
 
 @router.delete("/api/users/{user_id}", dependencies=[auth.require("users:manage")])
-async def delete_user(user_id: int, user: auth.CurrentUser):
+async def delete_user(user_id: int, user: auth.CurrentUser) -> dict[str, Any]:
     if user_id == user["id"]:
         raise bad_request("cannot delete your own account")
     await _delete_users([user_id])
@@ -152,7 +153,7 @@ async def delete_user(user_id: int, user: auth.CurrentUser):
 
 
 @router.delete("/api/users", dependencies=[auth.require("users:manage")])
-async def delete_users(id: list[int], user: auth.CurrentUser):  # noqa: A002
+async def delete_users(id: list[int], user: auth.CurrentUser) -> dict[str, Any]:
     if user["id"] in id:
         raise bad_request("cannot delete your own account")
     await _delete_users(id)
@@ -176,12 +177,12 @@ class RolePayload(BaseModel):
 
 
 @router.get("/api/roles/users", dependencies=[auth.require("roles:get")])
-async def get_user_roles():
+async def get_user_roles() -> dict[str, Any]:
     return ok(await db.fetch("get-user-roles", 0))
 
 
 @router.get("/api/roles/lists", dependencies=[auth.require("roles:get")])
-async def get_list_roles():
+async def get_list_roles() -> dict[str, Any]:
     return ok(await db.fetch("get-list-roles"))
 
 
@@ -196,7 +197,7 @@ async def _upsert_list_perms(role_id: int, lists: list[ListPermission]) -> None:
 
 
 @router.post("/api/roles/users", dependencies=[auth.require("roles:manage")])
-async def create_user_role(payload: RolePayload):
+async def create_user_role(payload: RolePayload) -> dict[str, Any]:
     if not payload.name.strip():
         raise bad_request("invalid role name")
     row = await db.fetchrow("create-role", payload.name.strip(), "user", payload.permissions)
@@ -204,7 +205,7 @@ async def create_user_role(payload: RolePayload):
 
 
 @router.post("/api/roles/lists", dependencies=[auth.require("roles:manage")])
-async def create_list_role(payload: RolePayload):
+async def create_list_role(payload: RolePayload) -> dict[str, Any]:
     if not payload.name.strip():
         raise bad_request("invalid role name")
     row = await db.fetchrow("create-role", payload.name.strip(), "list", [])
@@ -216,7 +217,7 @@ async def create_list_role(payload: RolePayload):
 
 
 @router.put("/api/roles/users/{role_id}", dependencies=[auth.require("roles:manage")])
-async def update_user_role(role_id: int, payload: RolePayload):
+async def update_user_role(role_id: int, payload: RolePayload) -> dict[str, Any]:
     if role_id == auth.SUPER_ADMIN_ROLE_ID:
         raise bad_request("cannot modify the super admin role")
     row = await db.fetchrow("update-role", role_id, payload.name.strip(), payload.permissions)
@@ -226,7 +227,7 @@ async def update_user_role(role_id: int, payload: RolePayload):
 
 
 @router.put("/api/roles/lists/{role_id}", dependencies=[auth.require("roles:manage")])
-async def update_list_role(role_id: int, payload: RolePayload):
+async def update_list_role(role_id: int, payload: RolePayload) -> dict[str, Any]:
     row = await db.fetchrow("update-role", role_id, payload.name.strip(), [])
     if not row:
         raise not_found("role not found")
@@ -236,7 +237,7 @@ async def update_list_role(role_id: int, payload: RolePayload):
 
 
 @router.delete("/api/roles/{role_id}", dependencies=[auth.require("roles:manage")])
-async def delete_role(role_id: int):
+async def delete_role(role_id: int) -> dict[str, Any]:
     if role_id == auth.SUPER_ADMIN_ROLE_ID:
         raise bad_request("cannot delete the super admin role")
     await db.execute("delete-role", role_id)

@@ -319,8 +319,7 @@ async function preview() {
   try {
     // Save first so the preview reflects what's on screen.
     if (id.value) await api.update(id.value, payload())
-    const res = await api.preview(id.value!)
-    previewHtml.value = (res as any).body ?? (res as any)
+    previewHtml.value = await api.preview(id.value!)
     previewOpen.value = true
   } catch (e: any) {
     error.value = e?.response?.data?.detail ?? 'Could not render a preview'

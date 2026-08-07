@@ -9,6 +9,7 @@ is needed; webhooks cover the common SES/SendGrid/Postmark setups.
 from __future__ import annotations
 
 import logging
+from datetime import UTC
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -32,7 +33,7 @@ async def get_bounces(
     source: str = "",
     order_by: str = "created_at",
     order: str = "DESC",
-):
+) -> dict[str, Any]:
     field = order_by if order_by in _ORDER_FIELDS else "created_at"
     direction = "ASC" if order.upper() == "ASC" else "DESC"
     sql = db.q("query-bounces").replace("%order%", f"{field} {direction}")
@@ -44,7 +45,7 @@ async def get_bounces(
 
 
 @router.get("/api/bounces/{bounce_id}", dependencies=[auth.require("bounces:get")])
-async def get_bounce(bounce_id: int):
+async def get_bounce(bounce_id: int) -> dict[str, Any]:
     sql = db.q("query-bounces").replace("%order%", "created_at DESC")
     rows = await db.fetch(sql, bounce_id, 0, 0, "", 0, 1)
     if not rows:
@@ -54,7 +55,7 @@ async def get_bounce(bounce_id: int):
 
 
 @router.delete("/api/bounces", dependencies=[auth.require("bounces:manage")])
-async def delete_bounces(id: list[int] = Query(default=[]), all: bool = False):  # noqa: A002
+async def delete_bounces(id: list[int] = Query(default=[]), all: bool = False) -> dict[str, Any]:
     if not id and not all:
         raise bad_request("no bounce IDs given")
     await db.execute("delete-bounces", id, all)
@@ -62,13 +63,13 @@ async def delete_bounces(id: list[int] = Query(default=[]), all: bool = False): 
 
 
 @router.delete("/api/bounces/{bounce_id}", dependencies=[auth.require("bounces:manage")])
-async def delete_bounce(bounce_id: int):
+async def delete_bounce(bounce_id: int) -> dict[str, Any]:
     await db.execute("delete-bounces", [bounce_id], False)
     return ok(True)
 
 
 @router.put("/api/bounces/blocklist", dependencies=[auth.require("bounces:manage")])
-async def blocklist_bounced():
+async def blocklist_bounced() -> dict[str, Any]:
     await db.execute("blocklist-bounced-subscribers")
     return ok(True)
 
@@ -97,7 +98,7 @@ async def record(
     count = int(cfg.get("count") or 0)
     action = cfg.get("action") or "none"
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     await db.execute(
         "record-bounce",
@@ -107,7 +108,7 @@ async def record(
         btype,
         source,
         meta or {},
-        datetime.now(timezone.utc),
+        datetime.now(UTC),
         count,
         action,
     )
@@ -126,7 +127,7 @@ def _enabled() -> None:
 
 
 @router.post("/webhooks/bounce", dependencies=[auth.require("webhooks:post_bounce")])
-async def bounce_webhook(request: Request):
+async def bounce_webhook(request: Request) -> dict[str, Any]:
     """Authenticated generic bounce endpoint (listmonk's own JSON format)."""
     _enabled()
     body = await request.json()
@@ -142,7 +143,7 @@ async def bounce_webhook(request: Request):
 
 
 @router.post("/webhooks/service/{service}", include_in_schema=False)
-async def bounce_service_webhook(service: str, request: Request):
+async def bounce_service_webhook(service: str, request: Request) -> dict[str, Any]:
     """Public, provider-specific bounce webhooks (SES, SendGrid, Postmark)."""
     _enabled()
     service = service.lower()

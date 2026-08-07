@@ -13,7 +13,8 @@ import copy
 import logging
 import re
 import uuid as uuidlib
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from app import db
 from app.utils import bad_request, parse_duration

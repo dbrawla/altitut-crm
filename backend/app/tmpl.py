@@ -22,13 +22,18 @@ from __future__ import annotations
 
 import functools
 import html as htmllib
+import logging
 import re
+from collections.abc import Callable
+from datetime import UTC
 from typing import Any
 
 from jinja2 import BaseLoader, Environment, TemplateError
 from markupsafe import Markup
 
 from app import db, settings
+
+log = logging.getLogger("listmonk")
 
 DUMMY_UUID = "00000000-0000-0000-0000-000000000000"
 
@@ -195,7 +200,6 @@ def split_defines(src: str) -> dict[str, str]:
     parts: dict[str, str] = {}
     depth = 0
     name: str | None = None
-    buf: list[str] = []
     pos = 0
     for m in re.finditer(r"\{\{-?\s*(.*?)\s*-?\}\}", src, re.S):
         stmt = m.group(1).strip()
@@ -203,7 +207,6 @@ def split_defines(src: str) -> dict[str, str]:
             mm = re.match(r'define\s+"([^"]+)"', stmt)
             name = mm.group(1) if mm else "unnamed"
             depth = 1
-            buf = []
             pos = m.end()
         elif name is not None:
             if stmt.startswith(("if ", "range ", "with ", "define ", "block ")):
@@ -226,7 +229,9 @@ def split_defines(src: str) -> dict[str, str]:
 class _Loader(BaseLoader):
     """Loads named sub-templates (header/footer from base.html) on demand."""
 
-    def get_source(self, environment: Environment, template: str):
+    def get_source(
+        self, environment: Environment, template: str
+    ) -> tuple[str, str | None, Callable[[], bool] | None]:
         base = (db.ROOT / "static" / "email-templates" / "base.html").read_text(encoding="utf-8")
         parts = split_defines(base)
         if template not in parts:
@@ -247,6 +252,8 @@ class L10n:
             try:
                 self._map = load_lang(settings.get("app.lang", "en"))
             except Exception:
+                # Fall back to raw keys rather than failing the whole render.
+                log.warning("could not load i18n strings; using keys", exc_info=True)
                 self._map = {}
         return self._map
 
@@ -272,7 +279,9 @@ def _make_env() -> Environment:
 def _fn_date(layout: str = "") -> str:
     from datetime import datetime
 
-    return datetime.now().strftime("%Y-%m-%d %H:%M" if not layout else "%Y-%m-%d")
+    # The app runs with TZ=Etc/UTC; be explicit rather than relying on it.
+    now = datetime.now(UTC)
+    return now.strftime("%Y-%m-%d %H:%M" if not layout else "%Y-%m-%d")
 
 
 _env = _make_env()
@@ -407,7 +416,7 @@ async def render_message(
         html_body = content
 
     # 4) @TrackLink suffixes (same effect as the original pre-compile rewrite).
-    def _tl(mm: re.Match) -> str:
+    def _tl(mm: re.Match[str]) -> str:
         return TrackLink(mm.group(1))
 
     html_body = _TRACKLINK_RE.sub(_tl, html_body)
@@ -494,7 +503,11 @@ def html_to_markdown(s: str) -> str:
     # ponytail: minimal converter for the content-type switcher; the frontend
     # does rich conversion client-side with turndown.
     for i in range(6, 0, -1):
-        s = re.sub(rf"(?is)<h{i}[^>]*>(.*?)</h{i}>", lambda m, i=i: "#" * i + " " + m.group(1) + "\n\n", s)
+
+        def _heading(m: re.Match[str], level: int = i) -> str:
+            return "#" * level + " " + m.group(1) + "\n\n"
+
+        s = re.sub(rf"(?is)<h{i}[^>]*>(.*?)</h{i}>", _heading, s)
     s = re.sub(r"(?is)<(b|strong)[^>]*>(.*?)</\1>", r"**\2**", s)
     s = re.sub(r"(?is)<(i|em)[^>]*>(.*?)</\1>", r"*\2*", s)
     s = re.sub(r'(?is)<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>', r"[\2](\1)", s)

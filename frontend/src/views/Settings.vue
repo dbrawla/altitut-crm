@@ -331,20 +331,26 @@ const testing = ref(false)
 const testEmail = ref('')
 let testBlock: Record<string, unknown> | null = null
 
-// Nested objects the template binds into directly; guard against missing keys
-// so a partially-populated settings map doesn't throw on render.
-const captcha = computed(() => {
-  const c = (s.value['security.captcha'] ??= {})
-  c.altcha ??= { enabled: false, complexity: 300000 }
-  c.hcaptcha ??= { enabled: false, key: '', secret: '' }
-  return c
-})
-const oidc = computed(() => (s.value['security.oidc'] ??= { enabled: false }))
-const bounceActions = computed(() => {
-  const b = (s.value['bounce.actions'] ??= {})
-  for (const k of ['soft', 'hard', 'complaint']) b[k] ??= { count: 1, action: 'none' }
-  return b
-})
+// The template binds v-model straight into these nested objects, so they must
+// exist before the first render. Filled in once on load rather than lazily from
+// a computed — a computed that mutates its own source re-triggers itself and
+// makes the render order load-bearing.
+function fillDefaults(cfg: Settings): Settings {
+  const captchaCfg = (cfg['security.captcha'] ??= {})
+  captchaCfg.altcha ??= { enabled: false, complexity: 300000 }
+  captchaCfg.hcaptcha ??= { enabled: false, key: '', secret: '' }
+
+  cfg['security.oidc'] ??= { enabled: false }
+
+  const actions = (cfg['bounce.actions'] ??= {})
+  for (const k of ['soft', 'hard', 'complaint']) actions[k] ??= { count: 1, action: 'none' }
+
+  return cfg
+}
+
+const captcha = computed(() => s.value['security.captcha'] ?? {})
+const oidc = computed(() => s.value['security.oidc'] ?? { enabled: false })
+const bounceActions = computed(() => s.value['bounce.actions'] ?? {})
 
 function addSMTP() {
   s.value.smtp ??= []
@@ -370,7 +376,7 @@ async function load() {
   try {
     const [cfg, data] = await Promise.all([server.config(), api.get()])
     langs.value = (cfg.langs as any) ?? []
-    s.value = data
+    s.value = fillDefaults(data)
   } catch (e: any) {
     error.value = e?.response?.data?.detail ?? 'Could not load settings'
   } finally {
