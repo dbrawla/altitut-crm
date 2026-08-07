@@ -39,5 +39,13 @@ class Env(BaseSettings):
     session_cookie_name: str = "listmonk_session"
     session_max_age: int = 86400 * 7  # seconds
 
+    # Firestore (migration target — service account key path, gitignored)
+    firebase_credentials_path: str = "firebase-credentials.json"
+
+    # Per-domain repo backend selection ("postgres" or "firestore") — the
+    # Postgres->Firestore migration cuts over one domain at a time; see
+    # app/repos/__init__.py and the migration plan for phase ordering.
+    repo_backend_media: str = "postgres"
+
 
 env = Env()

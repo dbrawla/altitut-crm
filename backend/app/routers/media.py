@@ -14,7 +14,8 @@ from pathlib import Path
 import aiofiles
 from fastapi import APIRouter, Depends, File, UploadFile
 
-from app import auth, db, settings
+from app import auth, settings
+from app.repos import media_repo
 from app.utils import Pagination, bad_request, not_found, ok
 
 router = APIRouter(tags=["media"])
@@ -52,15 +53,13 @@ def _safe_name(name: str) -> str:
 @router.get("/api/media", dependencies=[auth.require("media:get")])
 async def get_all_media(pg: Pagination = Depends(), query: str = ""):
     provider = settings.get("upload.provider") or "filesystem"
-    q = f"%{query}%" if query else ""
-    rows = await db.fetch("query-media", q, provider, pg.offset, pg.limit)
-    total = rows[0]["total"] if rows else 0
+    rows, total = await media_repo.query(query, provider, pg.offset, pg.limit)
     return ok(pg.results([_shape(r) for r in rows], total, query))
 
 
 @router.get("/api/media/{media_id}", dependencies=[auth.require("media:get")])
 async def get_media(media_id: int):
-    row = await db.fetchrow("get-media", media_id, "", "")
+    row = await media_repo.get(media_id)
     if not row:
         raise not_found("media not found")
     return ok(_shape(row))
@@ -99,21 +98,19 @@ async def upload_media(file: UploadFile = File(...)):
         except Exception:
             thumb = ""
 
-    media_id = await db.fetchval(
-        "insert-media", uid, filename, thumb, file.content_type or "",
+    media_id = await media_repo.insert(
+        uid, filename, thumb, file.content_type or "",
         settings.get("upload.provider") or "filesystem", {},
     )
-    row = await db.fetchrow("get-media", media_id, "", "")
+    row = await media_repo.get(media_id)
     return ok(_shape(row or {}))
 
 
 @router.delete("/api/media/{media_id}", dependencies=[auth.require("media:manage")])
 async def delete_media(media_id: int):
-    row = await db.fetchrow("get-media", media_id, "", "")
+    row = await media_repo.delete(media_id)
     if not row:
         raise not_found("media not found")
-
-    await db.fetchval("delete-media", media_id)
 
     directory = _upload_dir()
     for name in (row.get("filename"), row.get("thumb")):
