@@ -12,9 +12,10 @@ from fastapi import APIRouter, Cookie, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import auth, db, settings, tmptokens
+from app import auth, settings, tmptokens
 from app.config import env
 from app.passwords import hash_password, verify_password
+from app.repos import user_repo
 from app.utils import bad_request, ok
 
 router = APIRouter(tags=["auth"])
@@ -43,11 +44,11 @@ class LoginRequest(BaseModel):
 
 @router.post("/api/login")
 async def login(payload: LoginRequest, response: Response) -> dict[str, Any]:
-    candidate = await db.fetchrow("get-user-for-login", payload.username.strip())
+    candidate = await user_repo.get_user_for_login(payload.username.strip())
     if not candidate or not verify_password(payload.password, candidate.get("password") or ""):
         raise HTTPException(status_code=403, detail="invalid credentials")
 
-    await db.execute("update-user-login", candidate["id"], "")
+    await user_repo.update_user_login(candidate["id"], "")
     user = candidate
 
     if user["twofa_type"] == "totp":
@@ -76,7 +77,7 @@ async def login_twofa(
     if not data or not data.get("pre_2fa"):
         raise HTTPException(status_code=401, detail="no pending 2FA login")
 
-    user = await db.fetchrow("get-user", data["user_id"], "", "")
+    user = await user_repo.get_user(data["user_id"])
     if not user or user["status"] != "enabled":
         raise HTTPException(status_code=401, detail="user not found or disabled")
 
@@ -137,8 +138,7 @@ async def update_profile(
 ) -> dict[str, Any]:
     if payload.password and payload.password != (payload.password2 or payload.password):
         raise bad_request("passwords do not match")
-    await db.execute(
-        "update-user-profile",
+    await user_repo.update_user_profile(
         user["id"],
         payload.name.strip(),
         payload.email.strip(),
@@ -273,8 +273,8 @@ async def reset_submit(
     if not isinstance(stored, str) or not secrets.compare_digest(stored, token):
         return _auth_page("Reset password", "<p>This reset link is invalid or has expired.</p>")
 
-    await db.execute(
-        "update-user-profile", user["id"], user["name"], user["email"], True, hash_password(password)
+    await user_repo.update_user_profile(
+        user["id"], user["name"], user["email"], True, hash_password(password)
     )
     # A password change invalidates every existing session for that user.
     await auth.delete_user_sessions(user["id"])
@@ -302,7 +302,7 @@ async def get_twofa_totp(user_id: int, user: auth.CurrentUser) -> dict[str, Any]
     import pyotp
     import qrcode
 
-    target = await db.fetchrow("get-user", user_id, "", "")
+    target = await user_repo.get_user(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="user not found")
 
@@ -333,14 +333,14 @@ async def enable_twofa(user_id: int, payload: TotpEnable, user: auth.CurrentUser
 
     if not pyotp.TOTP(payload.secret).verify(payload.code.strip(), valid_window=1):
         raise bad_request("invalid 2FA code")
-    await db.execute("set-user-twofa", user_id, "totp", payload.secret)
+    await user_repo.set_user_twofa(user_id, "totp", payload.secret)
     return ok(True)
 
 
 @router.delete("/api/users/{user_id}/twofa")
 async def disable_twofa(user_id: int, user: auth.CurrentUser) -> dict[str, Any]:
     _check_self_or_admin(user, user_id)
-    await db.execute("set-user-twofa", user_id, "none", None)
+    await user_repo.set_user_twofa(user_id, "none", None)
     return ok(True)
 
 
@@ -434,24 +434,24 @@ async def oidc(request: Request) -> Response:
 
     user = await auth.get_user(email=email)
     if not user and cfg.get("auto_create_users"):
-        username = email
-        await db.fetchval(
-            "create-user",
-            username,
-            False,
-            "",
-            email,
-            claims.get("name") or email,
-            "user",
-            cfg.get("default_user_role_id") or auth.SUPER_ADMIN_ROLE_ID,
-            cfg.get("default_list_role_id"),
-            "enabled",
+        await user_repo.create_user(
+            {
+                "username": email,
+                "password_login": False,
+                "password": "",
+                "email": email,
+                "name": claims.get("name") or email,
+                "type": "user",
+                "user_role_id": cfg.get("default_user_role_id") or auth.SUPER_ADMIN_ROLE_ID,
+                "list_role_id": cfg.get("default_list_role_id"),
+                "status": "enabled",
+            }
         )
         user = await auth.get_user(email=email)
     if not user or user["status"] != "enabled":
         raise HTTPException(status_code=403, detail="user not found or disabled")
 
-    await db.execute("update-user-login", user["id"], claims.get("picture") or "")
+    await user_repo.update_user_login(user["id"], claims.get("picture") or "")
     sid = await auth.create_session(user["id"])
     resp = RedirectResponse(url="/admin", status_code=302)
     _set_session_cookie(resp, sid)

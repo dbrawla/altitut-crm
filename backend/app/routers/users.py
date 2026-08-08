@@ -5,12 +5,13 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
+import asyncpg
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app import auth, db
+from app import auth
 from app.passwords import hash_password
-from app.repos import role_repo
+from app.repos import role_repo, user_repo
 from app.utils import bad_request, not_found, ok
 
 router = APIRouter(tags=["users"])
@@ -43,13 +44,13 @@ def _strip_password(u: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/api/users", dependencies=[auth.require("users:get")])
 async def get_users() -> dict[str, Any]:
-    rows = await db.fetch("get-users")
+    rows = await user_repo.get_users()
     return ok([_strip_password(r) for r in rows])
 
 
 @router.get("/api/users/{user_id}", dependencies=[auth.require("users:get")])
 async def get_user(user_id: int) -> dict[str, Any]:
-    row = await db.fetchrow("get-user", user_id, "", "")
+    row = await user_repo.get_user(user_id)
     if not row:
         raise not_found("user not found")
     return ok(_strip_password(row))
@@ -82,22 +83,26 @@ async def create_user(payload: UserPayload) -> dict[str, Any]:
         password = hash_password(payload.password) if payload.password else ""
         password_login = payload.password_login
 
-    user_id = await db.fetchval(
-        "create-user",
-        payload.username.strip(),
-        password_login,
-        password,
-        payload.email.strip() or f"{payload.username.strip()}@listmonk",
-        payload.name.strip() or payload.username.strip(),
-        payload.type,
-        payload.user_role_id,
-        payload.list_role_id,
-        payload.status,
-    )
+    try:
+        user_id = await user_repo.create_user(
+            {
+                "username": payload.username.strip(),
+                "password_login": password_login,
+                "password": password,
+                "email": payload.email.strip() or f"{payload.username.strip()}@listmonk",
+                "name": payload.name.strip() or payload.username.strip(),
+                "type": payload.type,
+                "user_role_id": payload.user_role_id,
+                "list_role_id": payload.list_role_id,
+                "status": payload.status,
+            }
+        )
+    except (asyncpg.UniqueViolationError, ValueError) as e:
+        raise bad_request("username or email already in use") from e
     if not user_id:
         raise bad_request("could not create user")
 
-    out = _strip_password(await db.fetchrow("get-user", user_id, "", "") or {})
+    out = _strip_password(await user_repo.get_user(user_id) or {})
     if token:
         # Only ever returned once, at creation.
         out["password"] = token
@@ -108,27 +113,33 @@ async def create_user(payload: UserPayload) -> dict[str, Any]:
 async def update_user(user_id: int, payload: UserPayload) -> dict[str, Any]:
     _validate(payload, creating=False)
 
-    cur = await db.fetchrow("get-user", user_id, "", "")
+    cur = await user_repo.get_user(user_id)
     if not cur:
         raise not_found("user not found")
 
-    # $9: <0 clears the list role, 0 leaves it untouched, >0 sets it.
+    # <0 clears the list role, 0 leaves it untouched, >0 sets it.
     list_role = payload.list_role_id if payload.list_role_id else -1
 
-    await db.execute(
-        "update-user",
-        user_id,
-        payload.username.strip(),
-        payload.password_login,
-        hash_password(payload.password) if payload.password else "",
-        payload.email.strip(),
-        payload.name.strip(),
-        payload.type,
-        payload.user_role_id,
-        list_role,
-        payload.status,
-    )
-    row = await db.fetchrow("get-user", user_id, "", "")
+    try:
+        ok_ = await user_repo.update_user(
+            user_id,
+            {
+                "username": payload.username.strip(),
+                "password_login": payload.password_login,
+                "password": hash_password(payload.password) if payload.password else "",
+                "email": payload.email.strip(),
+                "name": payload.name.strip(),
+                "type": payload.type,
+                "user_role_id": payload.user_role_id,
+                "list_role_id": list_role,
+                "status": payload.status,
+            },
+        )
+    except (asyncpg.UniqueViolationError, ValueError) as e:
+        raise bad_request("username or email already in use") from e
+    if not ok_:
+        raise bad_request("cannot demote or disable the only enabled super admin")
+    row = await user_repo.get_user(user_id)
     if not row:
         raise not_found("user not found")
 
@@ -142,7 +153,8 @@ async def update_user(user_id: int, payload: UserPayload) -> dict[str, Any]:
 async def _delete_users(ids: list[int]) -> None:
     if not ids:
         raise bad_request("no user IDs given")
-    await db.execute("delete-users", ids)
+    if not await user_repo.delete_users(ids):
+        raise bad_request("cannot delete the only enabled super admin")
     for i in ids:
         await auth.delete_user_sessions(i)
 

@@ -1,21 +1,18 @@
 -- name: create-user
 -- $3 is the final value to store: a bcrypt hash (app/passwords.py), a raw
 -- API token, or '' - hashing/token generation happens in Python now, not
--- via pgcrypto's CRYPT()/GEN_SALT('bf').
+-- via pgcrypto's CRYPT()/GEN_SALT('bf'). $7/$8 (role IDs) are stored as-is,
+-- unvalidated - app/repos/users.py validates against role_repo instead of
+-- a same-database FK subquery, since Roles may live in Firestore now.
 INSERT INTO users (username, password_login, password, email, name, type, user_role_id, list_role_id, status)
-    VALUES($1, $2, (CASE WHEN $3 = '' THEN NULL ELSE $3 END), $4, $5, $6, (SELECT id FROM roles WHERE id = $7 AND type = 'user'), (SELECT id FROM roles WHERE id = $8 AND type = 'list'), $9) RETURNING id;
+    VALUES($1, $2, (CASE WHEN $3 = '' THEN NULL ELSE $3 END), $4, $5, $6, $7, $8, $9) RETURNING id;
 
 -- name: update-user
-WITH u AS (
-    -- Edit is only allowed if there are more than 1 active super users or
-    -- if the only superadmin user's status/role isn't being changed.
-    SELECT
-        CASE
-            WHEN (SELECT COUNT(*) FROM users WHERE id != $1 AND status = 'enabled' AND type = 'user' AND user_role_id = 1) = 0  AND ($8 != 1 OR $10 != 'enabled')
-            THEN FALSE
-            ELSE TRUE
-        END AS canEdit
-)
+-- The "don't demote/disable the last superadmin" guard moved to Python
+-- (app/repos/users.py) - it needs to count OTHER enabled superadmins via
+-- role_repo now, which a same-database SQL subquery can't do once Roles
+-- may live in Firestore. This unconditionally applies the given fields;
+-- callers only invoke it after the guard passes.
 UPDATE users SET
     username=(CASE WHEN $2 != '' THEN $2 ELSE username END),
     password_login=$3,
@@ -30,102 +27,39 @@ UPDATE users SET
     email=(CASE WHEN $5 != '' THEN $5 ELSE email END),
     name=(CASE WHEN $6 != '' THEN $6 ELSE name END),
     type=(CASE WHEN $7 != '' THEN $7::user_type ELSE type END),
-    user_role_id=(CASE WHEN $8 != 0 THEN (SELECT id FROM roles WHERE id = $8 AND type = 'user') ELSE user_role_id END),
+    user_role_id=(CASE WHEN $8 != 0 THEN $8 ELSE user_role_id END),
     list_role_id=(
         CASE
             WHEN $9 < 0 THEN NULL
-            WHEN $9 > 0 THEN (SELECT id FROM roles WHERE id = $9 AND type = 'list')
+            WHEN $9 > 0 THEN $9
             ELSE list_role_id END
     ),
     status=(CASE WHEN $10 != '' THEN $10::user_status ELSE status END),
     updated_at=NOW()
-    WHERE id=$1 AND (SELECT canEdit FROM u) = TRUE;
+    WHERE id=$1;
 
 -- name: delete-users
-WITH u AS (
-    SELECT COUNT(*) AS num FROM users WHERE NOT(id = ANY($1)) AND user_role_id=1 AND type='user' AND status='enabled'
-)
-DELETE FROM users WHERE id = ALL($1) AND (SELECT num FROM u) > 0;
+-- The "leave at least one enabled superadmin" guard moved to Python for the
+-- same reason as update-user above.
+DELETE FROM users WHERE id = ANY($1);
 
 -- name: get-users
-WITH ur AS (
-    SELECT id, name, permissions FROM roles WHERE type = 'user' AND parent_id IS NULL
-),
-lr AS (
-    SELECT r.id, r.name, r.permissions, r.list_id, l.name AS list_name
-    FROM roles r
-    LEFT JOIN lists l ON r.list_id = l.id
-    WHERE r.type = 'list' AND r.parent_id IS NULL
-),
-lp AS (
-    SELECT lr.id AS list_role_id,
-        JSONB_AGG(
-            JSONB_BUILD_OBJECT(
-                'id', COALESCE(cr.list_id, lr.list_id),
-                'name', COALESCE(cl.name, lr.list_name),
-                'permissions', COALESCE(cr.permissions, lr.permissions)
-            )
-        ) AS list_role_perms
-    FROM lr
-    LEFT JOIN roles cr ON cr.parent_id = lr.id AND cr.type = 'list'
-    LEFT JOIN lists cl ON cr.list_id = cl.id
-    GROUP BY lr.id
-)
-SELECT
-    users.*,
-    ur.id AS user_role_id,
-    ur.name AS user_role_name,
-    ur.permissions AS user_role_permissions,
-    lp.list_role_id,
-    lr.name AS list_role_name,
-    lp.list_role_perms
-FROM users
-    LEFT JOIN ur ON users.user_role_id = ur.id
-    LEFT JOIN lp ON users.list_role_id = lp.list_role_id
-    LEFT JOIN lr ON lp.list_role_id = lr.id
-    ORDER BY users.created_at;
+SELECT * FROM users ORDER BY created_at;
 
 -- name: get-user
-WITH sel AS (
-    SELECT * FROM users
+SELECT * FROM users
     WHERE
     (
         CASE
-            WHEN $1::INT != 0 THEN users.id = $1
+            WHEN $1::INT != 0 THEN id = $1
             WHEN $2::TEXT != '' THEN username = $2
             WHEN $3::TEXT != '' THEN email = $3
         END
-    )
-)
-SELECT
-    sel.*,
-    ur.id AS user_role_id,
-    ur.name AS user_role_name,
-    ur.permissions AS user_role_permissions,
-    lr.id AS list_role_id,
-    lr.name AS list_role_name,
-    lp.list_role_perms
-FROM sel
-    LEFT JOIN roles ur ON sel.user_role_id = ur.id AND ur.type = 'user' AND ur.parent_id IS NULL
-    LEFT JOIN (
-        SELECT r.id, r.name, r.permissions, r.list_id, l.name AS list_name
-        FROM roles r
-        LEFT JOIN lists l ON r.list_id = l.id
-        WHERE r.type = 'list' AND r.parent_id IS NULL
-    ) lr ON sel.list_role_id = lr.id
-    LEFT JOIN LATERAL (
-        SELECT JSONB_AGG(
-                JSONB_BUILD_OBJECT(
-                    'id', COALESCE(cr.list_id, lr.list_id),
-                    'name', COALESCE(cl.name, lr.list_name),
-                    'permissions', COALESCE(cr.permissions, lr.permissions)
-                )
-            ) AS list_role_perms
-        FROM roles cr
-        LEFT JOIN lists cl ON cr.list_id = cl.id
-        WHERE cr.parent_id = lr.id AND cr.type = 'list'
-        GROUP BY lr.id
-    ) lp ON TRUE;
+    );
+
+-- name: count-other-enabled-superadmins
+SELECT COUNT(*) FROM users
+    WHERE NOT(id = ANY($1)) AND user_role_id = 1 AND type = 'user' AND status = 'enabled';
 
 
 -- name: get-api-tokens

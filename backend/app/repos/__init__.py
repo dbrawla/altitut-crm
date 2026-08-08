@@ -15,6 +15,7 @@ from app.repos.media import FirestoreMediaRepo, MediaRepo, PgMediaRepo
 from app.repos.roles import FirestoreRoleRepo, PgRoleRepo, RoleRepo
 from app.repos.sessions import FirestoreSessionRepo, PgSessionRepo, SessionRepo
 from app.repos.settings import FirestoreSettingsRepo, PgSettingsRepo, SettingsRepo
+from app.repos.users import FirestoreUserRepo, PgUserRepo, UserRepo
 
 media_repo: MediaRepo = (
     FirestoreMediaRepo() if env.repo_backend_media == "firestore" else PgMediaRepo()
@@ -30,4 +31,8 @@ session_repo: SessionRepo = (
 
 role_repo: RoleRepo = (
     FirestoreRoleRepo() if env.repo_backend_roles == "firestore" else PgRoleRepo()
+)
+
+user_repo: UserRepo = (
+    FirestoreUserRepo() if env.repo_backend_users == "firestore" else PgUserRepo()
 )

@@ -14,9 +14,8 @@ from typing import Annotated, Any
 
 from fastapi import Cookie, Depends, Header, HTTPException, Request, params, status
 
-from app import db
 from app.config import env
-from app.repos import session_repo
+from app.repos import session_repo, user_repo
 
 SUPER_ADMIN_ROLE_ID = 1
 
@@ -79,7 +78,7 @@ def _shape_user(u: User) -> User:
 async def get_user(
     user_id: int = 0, username: str = "", email: str = "", shape: bool = True
 ) -> User | None:
-    row = await db.fetchrow("get-user", user_id, username, email)
+    row = await user_repo.get_user(user_id, username, email)
     if not row:
         return None
     return _shape_user(row) if shape else row
@@ -132,7 +131,7 @@ async def current_user(
                         status.HTTP_401_UNAUTHORIZED, "invalid token"
                     ) from e
             api_user, _, token = rest.partition(":")
-            u = await db.fetchrow("get-user", 0, api_user.strip(), "")
+            u = await user_repo.get_user(username=api_user.strip())
             if (
                 u
                 and u["type"] == "api"
