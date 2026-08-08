@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from app.config import env
 from app.repos.media import FirestoreMediaRepo, MediaRepo, PgMediaRepo
+from app.repos.roles import FirestoreRoleRepo, PgRoleRepo, RoleRepo
 from app.repos.sessions import FirestoreSessionRepo, PgSessionRepo, SessionRepo
 from app.repos.settings import FirestoreSettingsRepo, PgSettingsRepo, SettingsRepo
 
@@ -25,4 +26,8 @@ settings_repo: SettingsRepo = (
 
 session_repo: SessionRepo = (
     FirestoreSessionRepo() if env.repo_backend_sessions == "firestore" else PgSessionRepo()
+)
+
+role_repo: RoleRepo = (
+    FirestoreRoleRepo() if env.repo_backend_roles == "firestore" else PgRoleRepo()
 )

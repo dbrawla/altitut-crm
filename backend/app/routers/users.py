@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app import auth, db
 from app.passwords import hash_password
+from app.repos import role_repo
 from app.utils import bad_request, not_found, ok
 
 router = APIRouter(tags=["users"])
@@ -180,12 +181,12 @@ class RolePayload(BaseModel):
 
 @router.get("/api/roles/users", dependencies=[auth.require("roles:get")])
 async def get_user_roles() -> dict[str, Any]:
-    return ok(await db.fetch("get-user-roles", 0))
+    return ok(await role_repo.get_roles("user"))
 
 
 @router.get("/api/roles/lists", dependencies=[auth.require("roles:get")])
 async def get_list_roles() -> dict[str, Any]:
-    return ok(await db.fetch("get-list-roles"))
+    return ok(await role_repo.get_roles("list"))
 
 
 async def _upsert_list_perms(role_id: int, lists: list[ListPermission]) -> None:
@@ -195,14 +196,14 @@ async def _upsert_list_perms(role_id: int, lists: list[ListPermission]) -> None:
     # the widest one with '' (the query ARRAY_REMOVEs the blanks).
     width = max((len(ln.permissions) for ln in lists), default=0)
     perms = [ln.permissions + [""] * (width - len(ln.permissions)) for ln in lists]
-    await db.execute("upsert-list-permissions", role_id, list_ids, perms)
+    await role_repo.upsert_list_permissions(role_id, list_ids, perms)
 
 
 @router.post("/api/roles/users", dependencies=[auth.require("roles:manage")])
 async def create_user_role(payload: RolePayload) -> dict[str, Any]:
     if not payload.name.strip():
         raise bad_request("invalid role name")
-    row = await db.fetchrow("create-role", payload.name.strip(), "user", payload.permissions)
+    row = await role_repo.create_role(payload.name.strip(), "user", payload.permissions)
     return ok(row)
 
 
@@ -210,11 +211,11 @@ async def create_user_role(payload: RolePayload) -> dict[str, Any]:
 async def create_list_role(payload: RolePayload) -> dict[str, Any]:
     if not payload.name.strip():
         raise bad_request("invalid role name")
-    row = await db.fetchrow("create-role", payload.name.strip(), "list", [])
+    row = await role_repo.create_role(payload.name.strip(), "list", [])
     if not row:
         raise bad_request("could not create role")
     await _upsert_list_perms(row["id"], payload.lists)
-    rows = await db.fetch("get-list-roles")
+    rows = await role_repo.get_roles("list")
     return ok(next((r for r in rows if r["id"] == row["id"]), row))
 
 
@@ -222,7 +223,7 @@ async def create_list_role(payload: RolePayload) -> dict[str, Any]:
 async def update_user_role(role_id: int, payload: RolePayload) -> dict[str, Any]:
     if role_id == auth.SUPER_ADMIN_ROLE_ID:
         raise bad_request("cannot modify the super admin role")
-    row = await db.fetchrow("update-role", role_id, payload.name.strip(), payload.permissions)
+    row = await role_repo.update_role(role_id, payload.name.strip(), payload.permissions)
     if not row:
         raise not_found("role not found")
     return ok(row)
@@ -230,11 +231,11 @@ async def update_user_role(role_id: int, payload: RolePayload) -> dict[str, Any]
 
 @router.put("/api/roles/lists/{role_id}", dependencies=[auth.require("roles:manage")])
 async def update_list_role(role_id: int, payload: RolePayload) -> dict[str, Any]:
-    row = await db.fetchrow("update-role", role_id, payload.name.strip(), [])
+    row = await role_repo.update_role(role_id, payload.name.strip(), [])
     if not row:
         raise not_found("role not found")
     await _upsert_list_perms(role_id, payload.lists)
-    rows = await db.fetch("get-list-roles")
+    rows = await role_repo.get_roles("list")
     return ok(next((r for r in rows if r["id"] == role_id), row))
 
 
@@ -242,5 +243,5 @@ async def update_list_role(role_id: int, payload: RolePayload) -> dict[str, Any]
 async def delete_role(role_id: int) -> dict[str, Any]:
     if role_id == auth.SUPER_ADMIN_ROLE_ID:
         raise bad_request("cannot delete the super admin role")
-    await db.execute("delete-role", role_id)
+    await role_repo.delete_role(role_id)
     return ok(True)
