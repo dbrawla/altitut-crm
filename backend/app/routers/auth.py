@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from app import auth, db, settings, tmptokens
 from app.config import env
+from app.passwords import hash_password, verify_password
 from app.utils import bad_request, ok
 
 router = APIRouter(tags=["auth"])
@@ -42,10 +43,12 @@ class LoginRequest(BaseModel):
 
 @router.post("/api/login")
 async def login(payload: LoginRequest, response: Response) -> dict[str, Any]:
-    # Password verification happens in Postgres via CRYPT(), like the original.
-    user = await db.fetchrow("login-user", payload.username.strip(), payload.password)
-    if not user:
+    candidate = await db.fetchrow("get-user-for-login", payload.username.strip())
+    if not candidate or not verify_password(payload.password, candidate.get("password") or ""):
         raise HTTPException(status_code=403, detail="invalid credentials")
+
+    await db.execute("update-user-login", candidate["id"], "")
+    user = candidate
 
     if user["twofa_type"] == "totp":
         sid = await auth.create_session(user["id"], extra={"pre_2fa": True})
@@ -140,7 +143,7 @@ async def update_profile(
         payload.name.strip(),
         payload.email.strip(),
         user["password_login"],
-        payload.password or "",
+        hash_password(payload.password) if payload.password else "",
     )
     # Changing the password invalidates all other sessions.
     if payload.password:
@@ -271,7 +274,7 @@ async def reset_submit(
         return _auth_page("Reset password", "<p>This reset link is invalid or has expired.</p>")
 
     await db.execute(
-        "update-user-profile", user["id"], user["name"], user["email"], True, password
+        "update-user-profile", user["id"], user["name"], user["email"], True, hash_password(password)
     )
     # A password change invalidates every existing session for that user.
     await auth.delete_user_sessions(user["id"])

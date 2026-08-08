@@ -1,16 +1,9 @@
 -- name: create-user
+-- $3 is the final value to store: a bcrypt hash (app/passwords.py), a raw
+-- API token, or '' - hashing/token generation happens in Python now, not
+-- via pgcrypto's CRYPT()/GEN_SALT('bf').
 INSERT INTO users (username, password_login, password, email, name, type, user_role_id, list_role_id, status)
-    VALUES($1, $2, (
-        CASE
-            -- For user types with password_login enabled, bcrypt and store the hash of the password.
-            WHEN $6::user_type != 'api' AND $2 AND $3 != ''
-                THEN CRYPT($3, GEN_SALT('bf'))
-            WHEN $6 = 'api'
-            -- For APIs, store the password (token) as-is.
-                THEN $3
-            ELSE NULL
-        END
-    ), $4, $5, $6, (SELECT id FROM roles WHERE id = $7 AND type = 'user'), (SELECT id FROM roles WHERE id = $8 AND type = 'list'), $9) RETURNING id;
+    VALUES($1, $2, (CASE WHEN $3 = '' THEN NULL ELSE $3 END), $4, $5, $6, (SELECT id FROM roles WHERE id = $7 AND type = 'user'), (SELECT id FROM roles WHERE id = $8 AND type = 'list'), $9) RETURNING id;
 
 -- name: update-user
 WITH u AS (
@@ -26,10 +19,11 @@ WITH u AS (
 UPDATE users SET
     username=(CASE WHEN $2 != '' THEN $2 ELSE username END),
     password_login=$3,
+    -- $4 is a bcrypt hash (already hashed in Python) or '' to leave unchanged.
     password=(
         CASE
             WHEN users.type = 'api' AND ($7 = '' OR $7 = 'api') THEN password
-            WHEN $3 = TRUE THEN (CASE WHEN $4 != '' THEN CRYPT($4, GEN_SALT('bf')) ELSE password END)
+            WHEN $3 = TRUE THEN (CASE WHEN $4 != '' THEN $4 ELSE password END)
             ELSE NULL
         END
     ),
@@ -137,18 +131,18 @@ FROM sel
 -- name: get-api-tokens
 SELECT username, password FROM users WHERE status='enabled' AND type='api';
 
--- name: login-user
-WITH u AS (
-    SELECT users.*, r.name as role_name, r.permissions FROM users
-    LEFT JOIN roles r ON (r.id = users.user_role_id)
-    WHERE username = $1 AND status != 'disabled' AND password_login = TRUE
-    AND CRYPT($2, password) = password
-)
-UPDATE users SET loggedin_at = NOW() WHERE id = (SELECT id FROM u) RETURNING *;
+-- name: get-user-for-login
+-- Fetches the candidate row by username only - password verification
+-- happens in Python (app/passwords.py) against the returned hash, since
+-- bcrypt comparison can't be expressed as a SQL predicate anymore.
+SELECT users.*, r.name as role_name, r.permissions FROM users
+LEFT JOIN roles r ON (r.id = users.user_role_id)
+WHERE username = $1 AND status != 'disabled' AND password_login = TRUE;
 
 -- name: update-user-profile
+-- $5 is a bcrypt hash (already hashed in Python) or '' to leave unchanged.
 UPDATE users SET name=$2, email=(CASE WHEN password_login THEN $3 ELSE email END),
-    password=(CASE WHEN $4 = TRUE THEN (CASE WHEN $5 != '' THEN CRYPT($5, GEN_SALT('bf')) ELSE password END) ELSE NULL END)
+    password=(CASE WHEN $4 = TRUE THEN (CASE WHEN $5 != '' THEN $5 ELSE password END) ELSE NULL END)
     WHERE id=$1;
 
 -- name: update-user-login

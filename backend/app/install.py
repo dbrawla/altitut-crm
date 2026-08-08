@@ -15,6 +15,7 @@ import asyncpg
 
 from app import db
 from app.config import env
+from app.passwords import hash_password
 
 log = logging.getLogger("listmonk")
 
@@ -122,11 +123,10 @@ async def install(pool: asyncpg.Pool) -> None:
             [1], False, "welcome-to-listmonk", archive_tpl, {"name": "Subscriber"}, None, None,
         )
 
-        # Super admin role + user. Password hashing happens in Postgres
-        # (CRYPT/GEN_SALT via pgcrypto), exactly like the original.
+        # Super admin role + user.
         role = await conn.fetchrow(db.q("create-role"), "Super Admin", "user", PERMISSIONS)
         await conn.fetchval(
-            db.q("create-user"), env.admin_username, True, env.admin_password,
+            db.q("create-user"), env.admin_username, True, hash_password(env.admin_password),
             f"{env.admin_username}@listmonk", env.admin_username, "user",
             role["id"], None, "enabled",
         )

@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app import auth, db
+from app.passwords import hash_password
 from app.utils import bad_request, not_found, ok
 
 router = APIRouter(tags=["users"])
@@ -77,7 +78,8 @@ async def create_user(payload: UserPayload) -> dict[str, Any]:
         token = secrets.token_hex(16)
         password, password_login = token, False
     else:
-        password, password_login = payload.password or "", payload.password_login
+        password = hash_password(payload.password) if payload.password else ""
+        password_login = payload.password_login
 
     user_id = await db.fetchval(
         "create-user",
@@ -117,7 +119,7 @@ async def update_user(user_id: int, payload: UserPayload) -> dict[str, Any]:
         user_id,
         payload.username.strip(),
         payload.password_login,
-        payload.password or "",
+        hash_password(payload.password) if payload.password else "",
         payload.email.strip(),
         payload.name.strip(),
         payload.type,
