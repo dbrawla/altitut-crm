@@ -48,12 +48,7 @@ async def login(payload: LoginRequest, response: Response) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="invalid credentials")
 
     if user["twofa_type"] == "totp":
-        sid = secrets.token_urlsafe(32)
-        await db.execute(
-            "INSERT INTO sessions (id, data) VALUES ($1, $2)",
-            sid,
-            {"user_id": user["id"], "pre_2fa": True},
-        )
+        sid = await auth.create_session(user["id"], extra={"pre_2fa": True})
         _set_session_cookie(response, sid)
         return ok({"twofa_required": True})
 
@@ -74,11 +69,11 @@ async def login_twofa(
 ) -> dict[str, Any]:
     if not session_id:
         raise HTTPException(status_code=401, detail="not authenticated")
-    row = await db.fetchrow("SELECT data FROM sessions WHERE id=$1", session_id)
-    if not row or not row["data"].get("pre_2fa"):
+    data = await auth.session_repo.get(session_id)
+    if not data or not data.get("pre_2fa"):
         raise HTTPException(status_code=401, detail="no pending 2FA login")
 
-    user = await db.fetchrow("get-user", row["data"]["user_id"], "", "")
+    user = await db.fetchrow("get-user", data["user_id"], "", "")
     if not user or user["status"] != "enabled":
         raise HTTPException(status_code=401, detail="user not found or disabled")
 
@@ -89,7 +84,7 @@ async def login_twofa(
     ):
         raise HTTPException(status_code=403, detail="invalid 2FA code")
 
-    await db.execute("DELETE FROM sessions WHERE id=$1", session_id)
+    await auth.delete_session(session_id)
     sid = await auth.create_session(user["id"])
     _set_session_cookie(response, sid)
     return ok(await auth.get_user(user_id=user["id"]))

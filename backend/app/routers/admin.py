@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from app import auth, db, settings
+from app.repos import settings_repo
 from app.utils import not_found, ok
 
 log = logging.getLogger("listmonk")
@@ -135,7 +136,7 @@ async def update_settings(payload: dict[str, Any]) -> dict[str, Any]:
 async def update_setting_by_key(key: str, value: Any) -> dict[str, Any]:
     if key not in settings.cache:
         raise not_found(f"unknown setting: {key}")
-    await db.execute("update-settings-by-key", key, value)
+    await settings_repo.update_one(key, value)
     await settings.reload_app()
     return ok(True)
 

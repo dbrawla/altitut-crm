@@ -10,13 +10,13 @@ optional per-list grants, identical to the original model.
 from __future__ import annotations
 
 import hmac
-import secrets
 from typing import Annotated, Any
 
 from fastapi import Cookie, Depends, Header, HTTPException, Request, params, status
 
 from app import db
 from app.config import env
+from app.repos import session_repo
 
 SUPER_ADMIN_ROLE_ID = 1
 
@@ -28,36 +28,21 @@ User = dict[str, Any]
 # ---------------------------------------------------------------------------
 
 
-async def create_session(user_id: int) -> str:
-    sid = secrets.token_urlsafe(32)
-    await db.execute(
-        "INSERT INTO sessions (id, data) VALUES ($1, $2)", sid, {"user_id": user_id}
-    )
-    # Opportunistically prune expired sessions. The age is bound as a parameter
-    # rather than interpolated, so the SQL text is constant.
-    await db.execute(
-        "DELETE FROM sessions WHERE created_at < NOW() - ($1 * INTERVAL '1 second')",
-        env.session_max_age,
-    )
-    return sid
+async def create_session(user_id: int, extra: dict[str, Any] | None = None) -> str:
+    return await session_repo.create(user_id, extra)
 
 
 async def get_session_user_id(sid: str) -> int | None:
-    row = await db.fetchrow(
-        """SELECT data FROM sessions WHERE id=$1
-            AND created_at >= NOW() - ($2 * INTERVAL '1 second')""",
-        sid,
-        env.session_max_age,
-    )
-    return row["data"].get("user_id") if row else None
+    data = await session_repo.get(sid)
+    return data.get("user_id") if data else None
 
 
 async def delete_session(sid: str) -> None:
-    await db.execute("DELETE FROM sessions WHERE id=$1", sid)
+    await session_repo.delete(sid)
 
 
 async def delete_user_sessions(user_id: int, except_sid: str = "") -> None:
-    await db.execute("delete-user-sessions", str(user_id), except_sid)
+    await session_repo.delete_for_user(user_id, except_sid)
 
 
 # ---------------------------------------------------------------------------
@@ -163,16 +148,11 @@ async def current_user(
     # 2) Session cookie.
     if not session_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
-    data = await db.fetchrow(
-        """SELECT data FROM sessions WHERE id=$1
-            AND created_at >= NOW() - ($2 * INTERVAL '1 second')""",
-        session_id,
-        env.session_max_age,
-    )
-    if not data or not data["data"].get("user_id") or data["data"].get("pre_2fa"):
+    data = await session_repo.get(session_id)
+    if not data or not data.get("user_id") or data.get("pre_2fa"):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "session expired or invalid")
 
-    session_user = await get_user(user_id=data["data"]["user_id"])
+    session_user = await get_user(user_id=data["user_id"])
     if not session_user or session_user["status"] != "enabled":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user not found or disabled")
     request.state.user = session_user

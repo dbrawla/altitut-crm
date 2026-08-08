@@ -12,7 +12,17 @@ from __future__ import annotations
 
 from app.config import env
 from app.repos.media import FirestoreMediaRepo, MediaRepo, PgMediaRepo
+from app.repos.sessions import FirestoreSessionRepo, PgSessionRepo, SessionRepo
+from app.repos.settings import FirestoreSettingsRepo, PgSettingsRepo, SettingsRepo
 
 media_repo: MediaRepo = (
     FirestoreMediaRepo() if env.repo_backend_media == "firestore" else PgMediaRepo()
+)
+
+settings_repo: SettingsRepo = (
+    FirestoreSettingsRepo() if env.repo_backend_settings == "firestore" else PgSettingsRepo()
+)
+
+session_repo: SessionRepo = (
+    FirestoreSessionRepo() if env.repo_backend_sessions == "firestore" else PgSessionRepo()
 )

@@ -54,6 +54,8 @@ class Env(BaseSettings):
     # Postgres->Firestore migration cuts over one domain at a time; see
     # app/repos/__init__.py and the migration plan for phase ordering.
     repo_backend_media: str = "postgres"
+    repo_backend_settings: str = "postgres"
+    repo_backend_sessions: str = "postgres"
 
 
 env = Env()

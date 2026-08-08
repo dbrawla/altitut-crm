@@ -16,7 +16,7 @@ import uuid as uuidlib
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from app import db
+from app.repos import settings_repo
 from app.utils import bad_request, parse_duration
 
 log = logging.getLogger("listmonk")
@@ -51,7 +51,7 @@ _SECRETS: list[tuple[str, str]] = [
 
 
 async def load() -> None:
-    row = await db.fetchval("get-settings")
+    row = await settings_repo.get_all()
     cache.clear()
     cache.update(row or {})
 
@@ -201,5 +201,5 @@ async def update(payload: dict[str, Any]) -> None:
 
     _restore_secrets(new, cur)
 
-    await db.execute("update-settings", new)
+    await settings_repo.update_many(new, set(cur.keys()))
     await reload_app()
