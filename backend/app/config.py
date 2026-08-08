@@ -58,6 +58,7 @@ class Env(BaseSettings):
     repo_backend_sessions: str = "postgres"
     repo_backend_roles: str = "postgres"
     repo_backend_users: str = "postgres"
+    repo_backend_lists: str = "postgres"
 
 
 env = Env()

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import uuid as uuidlib
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from app import auth, db
+from app import auth
+from app.repos import list_repo
 from app.utils import Pagination, bad_request, not_found, ok
 
 router = APIRouter(tags=["lists"])
@@ -39,20 +39,17 @@ async def get_lists(
     minimal: bool = False,
 ) -> dict[str, Any]:
     permitted, all_ok = auth.permitted_list_ids(user, "get")
+    permitted_ids = None if all_ok else permitted
 
     if minimal:
-        rows = await db.fetch("get-lists", "", "", "name", all_ok, permitted)
+        rows = await list_repo.get_lists_minimal(permitted_ids)
         return ok({"results": rows})
 
     field = order_by if order_by in _ORDER_FIELDS else "id"
     direction = "ASC" if order.upper() == "ASC" else "DESC"
-    sql = db.q("query-lists").replace("%order%", f"{field} {direction}")
-    rows = await db.fetch(
-        sql, 0, "", query, type, optin, status, tag, all_ok, permitted, pg.offset, pg.limit
+    rows, total = await list_repo.query_lists(
+        query, type, optin, status, tag, permitted_ids, field, direction, pg.offset, pg.limit
     )
-    total = rows[0]["total"] if rows else 0
-    for r in rows:
-        r.pop("total", None)
     return ok(pg.results(rows, total, query))
 
 
@@ -61,33 +58,28 @@ async def get_list(list_id: int, user: auth.CurrentUser) -> dict[str, Any]:
     permitted, all_ok = auth.permitted_list_ids(user, "get")
     if not all_ok and list_id not in permitted:
         raise not_found("list not found")
-    sql = db.q("query-lists").replace("%order%", "id ASC")
-    rows = await db.fetch(sql, list_id, "", "", "", "", "", [], True, [], 0, 1)
-    if not rows:
+    row = await list_repo.get_list(list_id)
+    if not row:
         raise not_found("list not found")
-    rows[0].pop("total", None)
-    return ok(rows[0])
+    return ok(row)
 
 
 @router.post("/api/lists", dependencies=[auth.require("lists:manage_all", "list:manage")])
 async def create_list(payload: ListPayload) -> dict[str, Any]:
     if not payload.name.strip():
         raise bad_request("invalid list name")
-    list_id = await db.fetchval(
-        "create-list",
-        str(uuidlib.uuid4()), payload.name.strip(), payload.type, payload.optin,
-        payload.status, payload.tags, payload.description,
+    list_id = await list_repo.create_list(
+        payload.name.strip(), payload.type, payload.optin, payload.status,
+        payload.tags, payload.description,
     )
     return await get_list_unscoped(list_id)
 
 
 async def get_list_unscoped(list_id: int) -> dict[str, Any]:
-    sql = db.q("query-lists").replace("%order%", "id ASC")
-    rows = await db.fetch(sql, list_id, "", "", "", "", "", [], True, [], 0, 1)
-    if not rows:
+    row = await list_repo.get_list(list_id)
+    if not row:
         raise not_found("list not found")
-    rows[0].pop("total", None)
-    return ok(rows[0])
+    return ok(row)
 
 
 @router.put("/api/lists/{list_id}", dependencies=[auth.require("lists:manage_all", "list:manage")])
@@ -95,8 +87,7 @@ async def update_list(list_id: int, payload: ListPayload, user: auth.CurrentUser
     permitted, all_ok = auth.permitted_list_ids(user, "manage")
     if not all_ok and list_id not in permitted:
         raise not_found("list not found")
-    await db.execute(
-        "update-list",
+    await list_repo.update_list(
         list_id, payload.name.strip(), payload.type, payload.optin, payload.status,
         payload.tags, payload.description,
     )
@@ -108,7 +99,7 @@ async def update_list(list_id: int, payload: ListPayload, user: auth.CurrentUser
 )
 async def delete_list(list_id: int, user: auth.CurrentUser) -> dict[str, Any]:
     permitted, all_ok = auth.permitted_list_ids(user, "manage")
-    await db.execute("delete-lists", [list_id], "", all_ok, permitted)
+    await list_repo.delete_lists([list_id], None if all_ok else permitted)
     return ok(True)
 
 
@@ -117,5 +108,5 @@ async def delete_lists(user: auth.CurrentUser, id: list[int] = Query(default=[])
     if not id:
         raise bad_request("no IDs given")
     permitted, all_ok = auth.permitted_list_ids(user, "manage")
-    await db.execute("delete-lists", id, "", all_ok, permitted)
+    await list_repo.delete_lists(id, None if all_ok else permitted)
     return ok(True)

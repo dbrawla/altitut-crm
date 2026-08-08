@@ -11,6 +11,7 @@ config change here, not a router rewrite. See the migration plan
 from __future__ import annotations
 
 from app.config import env
+from app.repos.lists import FirestoreListRepo, ListRepo, PgListRepo
 from app.repos.media import FirestoreMediaRepo, MediaRepo, PgMediaRepo
 from app.repos.roles import FirestoreRoleRepo, PgRoleRepo, RoleRepo
 from app.repos.sessions import FirestoreSessionRepo, PgSessionRepo, SessionRepo
@@ -35,4 +36,8 @@ role_repo: RoleRepo = (
 
 user_repo: UserRepo = (
     FirestoreUserRepo() if env.repo_backend_users == "firestore" else PgUserRepo()
+)
+
+list_repo: ListRepo = (
+    FirestoreListRepo() if env.repo_backend_lists == "firestore" else PgListRepo()
 )

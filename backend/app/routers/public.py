@@ -17,6 +17,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app import captcha, db, settings, tmpl
+from app.repos import list_repo
 from app.utils import bad_request, not_found, ok
 
 log = logging.getLogger("listmonk")
@@ -238,8 +239,7 @@ async def unsubscribe(
 async def public_lists() -> dict[str, Any]:
     if not settings.get("app.enable_public_subscription_page", True):
         raise HTTPException(status_code=404, detail="public subscription page is disabled")
-    sql = db.q("query-lists").replace("%order%", "name ASC")
-    rows = await db.fetch(sql, 0, "", "", "public", "", "active", [], True, [], 0, 0)
+    rows, _ = await list_repo.query_lists("", "public", "", "active", [], None, "name", "ASC", 0, 0)
     return ok(
         [
             {"uuid": r["uuid"], "name": r["name"], "optin": r["optin"],
@@ -288,9 +288,7 @@ async def public_subscribe(
         raise bad_request("domain not allowed")
 
     # The form posts list UUIDs; upsert-subscriber takes INT list IDs ($5).
-    # $2 must be NULL (not []) — the query's CASE has no ELSE, so an empty
-    # non-null INT[] would match `id = ANY('{}')` and return nothing.
-    target = await db.fetch("get-lists-by-optin", "", None, l)
+    target = await list_repo.get_lists_by_optin("", None, l)
     if not target:
         raise bad_request("no such lists")
     list_ids = [r["id"] for r in target]
@@ -332,8 +330,7 @@ async def subscription_form() -> HTMLResponse:
     if not settings.get("app.enable_public_subscription_page", True):
         raise HTTPException(status_code=404, detail="public subscription page is disabled")
 
-    sql = db.q("query-lists").replace("%order%", "name ASC")
-    rows = await db.fetch(sql, 0, "", "", "public", "", "active", [], True, [], 0, 0)
+    rows, _ = await list_repo.query_lists("", "public", "", "active", [], None, "name", "ASC", 0, 0)
     boxes = "".join(
         f'<label><input type="checkbox" name="l" value="{ln["uuid"]}"> {ln["name"]}</label>'
         for ln in rows

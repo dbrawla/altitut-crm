@@ -97,13 +97,14 @@ class FirestoreRoleRepo:
         return await asyncio.to_thread(_txn, self._db.transaction())
 
     async def _list_names(self, list_ids: list[int]) -> dict[int, str]:
-        """Temporary: Lists isn't ported yet (Phase 4), so list names for
-        list_permissions come from Postgres directly."""
+        """List names for list_permissions, via app.repos.list_repo (Phase 4a) -
+        composes the two already-migrated domains regardless of which backend
+        either is on, same pattern as Phase 3c's role/user composition."""
         if not list_ids:
             return {}
-        rows = await db.fetch(
-            "SELECT id, name FROM lists WHERE id = ANY($1::INT[])", list_ids
-        )
+        from app.repos import list_repo  # deferred: avoids a circular import at module load
+
+        rows = await list_repo.get_lists_minimal(permitted_ids=list_ids)
         return {r["id"]: r["name"] for r in rows}
 
     async def get_roles(self, role_type: str, role_id: int = 0) -> list[dict[str, Any]]:
