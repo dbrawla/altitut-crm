@@ -2,10 +2,18 @@
 
 Subscriber counts (today's mat_list_subscriber_stats materialized view)
 become a distributed-counter subcollection per the migration plan:
-lists/{id}/counter_shards/{shardId}, summed on read. Phase 4a (this file)
-only reads that subcollection - it stays empty (counts read as 0) until
-Phase 4b's subscriber/membership writes start populating it, at which
-point counts reflect reality automatically with no further change here.
+lists/{id}/counter_shards/{shardId}, summed on read.
+
+Where counts actually come from is keyed on where *Subscribers* lives
+(env.repo_backend_subscribers), independent of where Lists itself lives -
+these can be, and during the migration transition typically are, on
+different backends. If Lists stays Postgres-backed after Subscribers cuts
+over to Firestore, the mat_list_subscriber_stats materialized view stops
+being the source of truth (it only reflects Postgres's own subscriber_lists
+table) and would silently go stale - discovered and fixed during Phase 4b
+testing, not a hypothetical: signing up a real subscriber after the
+Subscribers cutover left the Lists page one count behind reality. See
+_list_subscriber_stats() below, which both repo classes use.
 
 Search/filter: Postgres does full-text search (TO_TSVECTOR/ILIKE) and tag
 array containment (<@) in SQL. Firestore has neither, so equality filters
@@ -16,9 +24,52 @@ in-memory over that bounded result - reasonable at list-table volumes
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Protocol
 
 from app import db
+from app.config import env
+
+
+async def _firestore_counter_stats(list_id: int) -> tuple[dict[str, int], int]:
+    """Sums lists/{id}/counter_shards/* directly against Firestore,
+    regardless of which backend Lists itself is on."""
+    from app.firestore_client import client
+
+    def _run() -> tuple[dict[str, int], int]:
+        shards = (
+            client()
+            .collection("lists")
+            .document(str(list_id))
+            .collection("counter_shards")
+            .stream()
+        )
+        statuses: dict[str, int] = {}
+        for s in shards:
+            for status, count in (s.to_dict() or {}).items():
+                statuses[status] = statuses.get(status, 0) + count
+        return statuses, sum(statuses.values())
+
+    return await asyncio.to_thread(_run)
+
+
+async def _postgres_counter_stats(list_id: int) -> tuple[dict[str, int], int]:
+    rows = await db.fetch(
+        "SELECT status, subscriber_count FROM mat_list_subscriber_stats WHERE list_id = $1",
+        list_id,
+    )
+    statuses = {r["status"]: r["subscriber_count"] for r in rows if r["status"]}
+    return statuses, sum(statuses.values())
+
+
+async def _list_subscriber_stats(list_id: int) -> tuple[dict[str, int], int] | None:
+    """Returns (statuses, total) from wherever subscriber membership
+    actually lives, or None if that's Postgres AND the caller is
+    PgListRepo (whose own query already has correct counts baked in via
+    mat_list_subscriber_stats in that case - nothing to override)."""
+    if env.repo_backend_subscribers == "firestore":
+        return await _firestore_counter_stats(list_id)
+    return None
 
 
 class ListRepo(Protocol):
@@ -106,6 +157,9 @@ class PgListRepo:
         total = rows[0]["total"] if rows else 0
         for r in rows:
             r.pop("total", None)
+            stats = await _list_subscriber_stats(r["id"])
+            if stats is not None:
+                r["subscriber_statuses"], r["subscriber_count"] = stats
         return rows, total
 
     async def get_list(
@@ -118,6 +172,9 @@ class PgListRepo:
         if not rows:
             return None
         rows[0].pop("total", None)
+        stats = await _list_subscriber_stats(list_id)
+        if stats is not None:
+            rows[0]["subscriber_statuses"], rows[0]["subscriber_count"] = stats
         return rows[0]
 
     async def get_lists_minimal(self, permitted_ids: list[int] | None) -> list[dict[str, Any]]:
@@ -182,24 +239,15 @@ class FirestoreListRepo:
         return await asyncio.to_thread(_txn, self._db.transaction())
 
     async def _subscriber_stats(self, list_id: int) -> tuple[dict[str, int], int]:
-        """Sums lists/{id}/counter_shards/* - empty/zero until Phase 4b writes
-        membership and starts incrementing shards."""
-        import asyncio
-
-        def _run() -> tuple[dict[str, int], int]:
-            shards = (
-                self._db.collection(self._COLLECTION)
-                .document(str(list_id))
-                .collection("counter_shards")
-                .stream()
-            )
-            statuses: dict[str, int] = {}
-            for s in shards:
-                for status, count in (s.to_dict() or {}).items():
-                    statuses[status] = statuses.get(status, 0) + count
-            return statuses, sum(statuses.values())
-
-        return await asyncio.to_thread(_run)
+        """Reads from wherever subscriber membership actually lives - the
+        counter shards under this same Firestore collection only have
+        correct data if Subscribers is also Firestore-backed; otherwise
+        membership (and truth) is still in Postgres's
+        mat_list_subscriber_stats. Mirrors PgListRepo's symmetric handling
+        in _list_subscriber_stats() for the reverse backend split."""
+        if env.repo_backend_subscribers == "firestore":
+            return await _firestore_counter_stats(list_id)
+        return await _postgres_counter_stats(list_id)
 
     async def _all_rows(self, list_type: str, optin: str, status: str) -> list[dict[str, Any]]:
         import asyncio

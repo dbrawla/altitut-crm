@@ -17,7 +17,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app import captcha, db, settings, tmpl
-from app.repos import list_repo
+from app.repos import list_repo, subscriber_repo
 from app.utils import bad_request, not_found, ok
 
 log = logging.getLogger("listmonk")
@@ -129,7 +129,7 @@ async def view_in_browser(camp_uuid: str, sub_uuid: str) -> HTMLResponse:
 
     sub = None
     if sub_uuid != _DUMMY:
-        sub = await db.fetchrow("get-subscriber", 0, sub_uuid, "")
+        sub = await subscriber_repo.get_subscriber(uuid=sub_uuid)
 
     _, html, _ = await tmpl.render_message(camp, sub, preview=True)
     if not settings.get("privacy.disable_tracking", False):
@@ -155,11 +155,13 @@ async def view_in_browser(camp_uuid: str, sub_uuid: str) -> HTMLResponse:
 @router.get("/subscription/optin/{sub_uuid}")
 async def optin_page(sub_uuid: str) -> HTMLResponse:
     _check_uuids(sub_uuid)
-    sub = await db.fetchrow("get-subscriber", 0, sub_uuid, "")
+    sub = await subscriber_repo.get_subscriber(uuid=sub_uuid)
     if not sub:
         raise not_found("subscriber not found")
 
-    lists = await db.fetch("get-subscriber-lists", 0, sub_uuid, [], [], "unconfirmed", "double")
+    lists = await subscriber_repo.get_subscriber_lists(
+        uuid=sub_uuid, status="unconfirmed", optin="double"
+    )
     if not lists:
         return _page("Confirmed", "<p>There are no subscriptions to confirm.</p>")
 
@@ -174,13 +176,15 @@ async def optin_page(sub_uuid: str) -> HTMLResponse:
 @router.post("/subscription/optin/{sub_uuid}")
 async def optin_confirm(sub_uuid: str, request: Request) -> HTMLResponse:
     _check_uuids(sub_uuid)
-    lists = await db.fetch("get-subscriber-lists", 0, sub_uuid, [], [], "unconfirmed", "double")
+    lists = await subscriber_repo.get_subscriber_lists(
+        uuid=sub_uuid, status="unconfirmed", optin="double"
+    )
     if lists:
         meta: dict[str, Any] = {}
         if settings.get("privacy.record_optin_ip", False) and request.client:
             meta = {"optin_ip": request.client.host}
-        await db.execute(
-            "confirm-subscription-optin", sub_uuid, [ln["uuid"] for ln in lists], meta
+        await subscriber_repo.confirm_subscription_optin(
+            sub_uuid, [ln["uuid"] for ln in lists], meta
         )
     return _page("Confirmed", "<p>Your subscription has been confirmed.</p>")
 
@@ -193,7 +197,7 @@ async def optin_confirm(sub_uuid: str, request: Request) -> HTMLResponse:
 @router.get("/subscription/{camp_uuid}/{sub_uuid}")
 async def subscription_page(camp_uuid: str, sub_uuid: str, manage: bool = False) -> HTMLResponse:
     _check_uuids(camp_uuid, sub_uuid)
-    sub = await db.fetchrow("get-subscriber", 0, sub_uuid, "")
+    sub = await subscriber_repo.get_subscriber(uuid=sub_uuid)
     if not sub:
         raise not_found("subscriber not found")
 
@@ -296,24 +300,23 @@ async def public_subscribe(
     import uuid as uuidlib
 
     sub_uuid = str(uuidlib.uuid4())
-    row = await db.fetchrow(
-        "upsert-subscriber",
-        sub_uuid,                    # $1 uuid
-        email,                       # $2 email
-        name.strip() or email,       # $3 name
-        {},                          # $4 attribs
-        list_ids,                    # $5 list IDs
-        "unconfirmed",               # $6 subscription status
-        True,                        # $7 overwrite name/attribs
-        False,                       # $8 don't downgrade an existing confirmed subscription
+    result = await subscriber_repo.upsert_subscriber(
+        sub_uuid,                    # uuid
+        email,                       # email
+        name.strip() or email,       # name
+        {},                          # attribs
+        list_ids,                    # list IDs
+        "unconfirmed",               # subscription status
+        True,                        # overwrite name/attribs
+        False,                       # don't downgrade an existing confirmed subscription
     )
 
     # Fire the double opt-in confirmation if any of the lists need it.
-    if settings.get("app.send_optin_confirmation", True) and row:
+    if settings.get("app.send_optin_confirmation", True) and result:
         from app import notifs
 
         try:
-            await notifs.send_optin_confirmation_by_id(row["id"])
+            await notifs.send_optin_confirmation_by_id(result[1])
         except Exception:
             log.exception("failed sending opt-in confirmation")
 
@@ -405,12 +408,11 @@ async def wipe_subscriber_data(sub_uuid: str) -> HTMLResponse:
         raise bad_request("data wipe is not allowed")
     _check_uuids(sub_uuid)
 
-    sub = await db.fetchrow("get-subscriber", 0, sub_uuid, "")
+    sub = await subscriber_repo.get_subscriber(uuid=sub_uuid)
     if not sub:
         raise not_found("subscriber not found")
 
-    # delete-subscribers takes ($1 INT[], $2 UUID[]) — both are required.
-    await db.execute("delete-subscribers", [sub["id"]], [])
+    await subscriber_repo.delete_subscribers([sub["id"]], [])
     return _page("Deleted", "<p>Your data has been deleted.</p>")
 
 

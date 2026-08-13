@@ -43,6 +43,22 @@ class SubscriberRepo(Protocol):
 
     async def get_subscribers_by_emails(self, emails: list[str]) -> list[dict[str, Any]]: ...
 
+    async def query_subscribers(
+        self,
+        list_ids: list[int],
+        subscription_status: str,
+        search: str,
+        order_by: str,
+        order: str,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Structured browse (list/status/search/sort/pagination) - no raw
+        SQL. Used by the main Subscribers admin page. The arbitrary-SQL
+        segmentation feature is a separate, still-Postgres-only code path in
+        the router (blocked pending a product decision, see Phase 7)."""
+        ...
+
     async def get_subscriber_lists(
         self,
         sub_id: int = 0,
@@ -120,6 +136,27 @@ class SubscriberRepo(Protocol):
 
 
 class PgSubscriberRepo:
+    async def query_subscribers(
+        self,
+        list_ids: list[int],
+        subscription_status: str,
+        search: str,
+        order_by: str,
+        order: str,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        sql = db.q("query-subscribers").replace("%query%", "TRUE").replace(
+            "%order%", f"subscribers.{order_by} {order}"
+        )
+        rows = await db.fetch(sql, list_ids, subscription_status, search, offset, limit)
+        if not list_ids and not search:
+            total = await db.fetchval("query-subscribers-count-all", list_ids, subscription_status)
+        else:
+            count_sql = db.q("query-subscribers-count").replace("%query%", "TRUE")
+            total = await db.fetchval(count_sql, list_ids, subscription_status, search)
+        return rows, int(total or 0)
+
     async def get_subscriber(
         self, sub_id: int = 0, uuid: str | None = "", email: str = ""
     ) -> dict[str, Any] | None:
@@ -137,8 +174,12 @@ class PgSubscriberRepo:
         status: str = "",
         optin: str = "",
     ) -> list[dict[str, Any]]:
+        # $2 is bound directly against the UUID-typed `uuid` column (`uuid =
+        # $2`, no `!= ''` text comparison first, unlike get-subscriber) - so
+        # Postgres infers it as uuid-typed and "" fails at bind time; must be
+        # NULL when looking up by sub_id instead.
         return await db.fetch(
-            "get-subscriber-lists", sub_id, uuid, list_ids or [], list_uuids or [], status, optin
+            "get-subscriber-lists", sub_id, uuid or None, list_ids or [], list_uuids or [], status, optin
         )
 
     async def get_subscriber_lists_lazy(
@@ -198,9 +239,17 @@ class PgSubscriberRepo:
         permitted_ids: list[int],
         allow_resubscribe: bool,
     ) -> None:
+        import orjson
+
+        # $5 is compared against '' before its ::JSONB cast (`WHEN $5 != ''`),
+        # which forces Postgres to type the parameter as text, not jsonb - so
+        # it must be a JSON string, not a raw dict (unlike insert/upsert's
+        # attribs param, which asyncpg's jsonb codec handles as a dict fine
+        # since there's no competing text inference there).
+        attribs_arg = orjson.dumps(attribs).decode() if attribs is not None else ""
         await db.execute(
             "update-subscriber-with-lists",
-            sub_id, email, name, status, attribs if attribs is not None else "",
+            sub_id, email, name, status, attribs_arg,
             list_ids, list_uuids, sub_status, delete_missing, permitted_ids, allow_resubscribe,
         )
 
@@ -317,6 +366,63 @@ class FirestoreSubscriberRepo:
             return None
 
         return await asyncio.to_thread(_run)
+
+    async def query_subscribers(
+        self,
+        list_ids: list[int],
+        subscription_status: str,
+        search: str,
+        order_by: str,
+        order: str,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        import asyncio
+
+        # Matches the original SQL's own quirk (preserved for behavior
+        # parity): with no list filter, the LEFT JOIN predicate against
+        # subscriber_lists never matches, so a status filter alone (no list
+        # filter) yields zero rows rather than "any subscriber with that
+        # status on any list".
+        if not list_ids and subscription_status:
+            return [], 0
+
+        def _run() -> list[dict[str, Any]]:
+            sub_col = self._db.collection(self._COLLECTION)
+            if list_ids:
+                member_ids: set[int] = set()
+                for list_id in list_ids:
+                    q = self._db.collection(self._MEMBERSHIP_COLLECTION).where(
+                        "list_id", "==", list_id
+                    )
+                    if subscription_status:
+                        q = q.where("status", "==", subscription_status)
+                    member_ids.update(d.to_dict()["subscriber_id"] for d in q.stream())
+                rows = []
+                for i in range(0, len(list(member_ids)), 30):
+                    chunk = list(member_ids)[i : i + 30]
+                    if not chunk:
+                        continue
+                    rows.extend(
+                        d.to_dict()
+                        for d in sub_col.where("id", "in", chunk).stream()
+                    )
+            else:
+                rows = [d.to_dict() for d in sub_col.stream()]
+            return rows
+
+        rows = await asyncio.to_thread(_run)
+        if search:
+            needle = search.lower()
+            rows = [
+                r
+                for r in rows
+                if needle in (r.get("name") or "").lower() or needle in (r.get("email") or "").lower()
+            ]
+        reverse = order.upper() == "DESC"
+        rows.sort(key=lambda r: r.get(order_by) if r.get(order_by) is not None else "", reverse=reverse)
+        total = len(rows)
+        return (rows[offset : offset + limit] if limit else rows[offset:]), total
 
     async def get_subscribers_by_emails(self, emails: list[str]) -> list[dict[str, Any]]:
         import asyncio
@@ -560,9 +666,10 @@ class FirestoreSubscriberRepo:
             if update_sub_status:
                 await self._set_membership(sub_id, list_id, member_status, {})
             else:
-                existing = await self._db.collection(self._MEMBERSHIP_COLLECTION).document(
+                member_ref = self._db.collection(self._MEMBERSHIP_COLLECTION).document(
                     f"{sub_id}_{list_id}"
-                ).get()
+                )
+                existing = await asyncio.to_thread(member_ref.get)
                 if existing.exists:
                     continue  # status update suppressed; leave as-is (touch not required)
                 await self._set_membership(sub_id, list_id, member_status, {})

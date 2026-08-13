@@ -20,7 +20,7 @@ from typing import Any
 
 import orjson
 
-from app import db
+from app.repos import subscriber_repo
 
 log = logging.getLogger("listmonk")
 
@@ -245,12 +245,11 @@ async def _run(
                     _log(f"row {i}: invalid attributes JSON")
             try:
                 if mode == MODE_BLOCKLIST:
-                    await db.execute(
-                        "upsert-blocklist-subscriber", str(uuidlib.uuid4()), email, name, attribs
+                    await subscriber_repo.upsert_blocklist_subscriber(
+                        str(uuidlib.uuid4()), email, name, attribs
                     )
                 else:
-                    await db.execute(
-                        "upsert-subscriber",
+                    await subscriber_repo.upsert_subscriber(
                         str(uuidlib.uuid4()), email, name, attribs, list_ids,
                         subscription_status or "unconfirmed", overwrite, overwrite,
                     )

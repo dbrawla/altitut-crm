@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app import db, manager, settings, tmpl
+from app import manager, settings, tmpl
+from app.repos import subscriber_repo
 
 log = logging.getLogger("listmonk")
 
@@ -21,12 +22,13 @@ async def send_optin_confirmation_by_id(sub_id: int) -> bool:
     Returns False when there is nothing to confirm (no double opt-in lists
     pending), matching the original's behaviour.
     """
-    sub = await db.fetchrow("get-subscriber", sub_id, "", "")
+    sub = await subscriber_repo.get_subscriber(sub_id)
     if not sub:
         return False
 
-    # $2 is typed UUID by Postgres, so it must be NULL (not "") when looking up by id.
-    lists = await db.fetch("get-subscriber-lists", sub_id, None, [], [], "unconfirmed", "double")
+    lists = await subscriber_repo.get_subscriber_lists(
+        sub_id=sub_id, status="unconfirmed", optin="double"
+    )
     if not lists:
         return False
 

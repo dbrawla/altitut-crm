@@ -14,6 +14,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from app import auth, db, manager, settings, tmpl
+from app.repos import subscriber_repo
 from app.utils import bad_request, ok
 
 log = logging.getLogger("listmonk")
@@ -137,7 +138,7 @@ async def send_tx(request: Request) -> dict[str, Any]:
         if m.subscriber_mode == "external":
             sub: dict[str, Any] | None = {"email": email, "name": email, "attribs": {}}
         else:
-            sub = await db.fetchrow("get-subscriber", sub_id, None, email)
+            sub = await subscriber_repo.get_subscriber(sub_id, email=email)
             if not sub:
                 if m.subscriber_mode == "fallback":
                     sub = {"email": email, "name": email, "attribs": {}}

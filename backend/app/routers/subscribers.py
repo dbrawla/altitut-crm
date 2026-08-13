@@ -20,6 +20,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from app import auth, db
+from app.repos import subscriber_repo
 from app.utils import Pagination, bad_request, not_found, ok
 
 router = APIRouter(tags=["subscribers"])
@@ -83,8 +84,7 @@ async def _attach_lists(subs: list[dict[str, Any]]) -> None:
     if not subs:
         return
     ids = [s["id"] for s in subs]
-    rows = await db.fetch("get-subscriber-lists-lazy", ids)
-    by_id = {r["subscriber_id"]: r["lists"] for r in rows}
+    by_id = await subscriber_repo.get_subscriber_lists_lazy(ids)
     for s in subs:
         s["lists"] = by_id.get(s["id"]) or []
 
@@ -108,19 +108,35 @@ async def get_subscribers(
     order: str = "DESC",
 ) -> dict[str, Any]:
     lists = _scope_lists(user, list_id, "get")
-    cond = _query_cond(user, query)
 
+    if not query:
+        # Structured browse (list/status/search/sort) - works on either
+        # backend. The arbitrary-SQL path below only ever runs against
+        # Postgres directly, so it can't be used once subscribers live in
+        # Firestore - there'd be nothing there to query against.
+        field = order_by if order_by in _ORDER_FIELDS else "id"
+        direction = "ASC" if order.upper() == "ASC" else "DESC"
+        results, total = await subscriber_repo.query_subscribers(
+            lists, subscription_status, search, field, direction, pg.offset, pg.limit
+        )
+        await _attach_lists(results)
+        return ok(pg.results(results, total, query))
+
+    from app.config import env
+
+    if env.repo_backend_subscribers == "firestore":
+        raise bad_request(
+            "advanced query segmentation is not available while subscribers are Firestore-backed"
+        )
+
+    cond = _query_cond(user, query)
     sql = db.q("query-subscribers").replace("%query%", cond).replace(
         "%order%", _order_clause(order_by, order)
     )
     results = await db.fetch(sql, lists, subscription_status, search, pg.offset, pg.limit)
     await _attach_lists(results)
-
-    if not query and not search:
-        total = await db.fetchval("query-subscribers-count-all", lists, subscription_status)
-    else:
-        count_sql = db.q("query-subscribers-count").replace("%query%", cond)
-        total = await db.fetchval(count_sql, lists, subscription_status, search)
+    count_sql = db.q("query-subscribers-count").replace("%query%", cond)
+    total = await db.fetchval(count_sql, lists, subscription_status, search)
 
     return ok(pg.results(results, int(total or 0), query))
 
@@ -172,7 +188,7 @@ async def export_subscribers(
     dependencies=[auth.require("subscribers:get", "subscribers:get_all")],
 )
 async def get_subscriber(sub_id: int) -> dict[str, Any]:
-    sub = await db.fetchrow("get-subscriber", sub_id, "", "")
+    sub = await subscriber_repo.get_subscriber(sub_id)
     if not sub:
         raise not_found("subscriber not found")
     await _attach_lists([sub])
@@ -239,8 +255,7 @@ async def create_subscriber(payload: SubscriberPayload, user: auth.CurrentUser) 
     lists = _scope_lists(user, payload.lists, "manage") if payload.lists else []
     sub_status = "confirmed" if payload.preconfirm_subscriptions else "unconfirmed"
     try:
-        sub_id = await db.fetchval(
-            "insert-subscriber",
+        sub_id = await subscriber_repo.insert_subscriber(
             str(uuidlib.uuid4()), email, payload.name.strip(), payload.status,
             payload.attribs, lists, [], sub_status,
         )
@@ -255,7 +270,7 @@ async def create_subscriber(payload: SubscriberPayload, user: auth.CurrentUser) 
 
         await notifs.send_optin_confirmation_by_id(sub_id)
 
-    sub = await db.fetchrow("get-subscriber", sub_id, "", "")
+    sub = await subscriber_repo.get_subscriber(sub_id)
     if not sub:
         raise not_found("subscriber not found")
     await _attach_lists([sub])
@@ -264,7 +279,7 @@ async def create_subscriber(payload: SubscriberPayload, user: auth.CurrentUser) 
 
 @router.delete("/api/subscribers/{sub_id}", dependencies=[auth.require("subscribers:manage")])
 async def delete_subscriber(sub_id: int) -> dict[str, Any]:
-    await db.execute("delete-subscribers", [sub_id], [])
+    await subscriber_repo.delete_subscribers([sub_id], [])
     return ok(True)
 
 
@@ -274,7 +289,7 @@ async def delete_subscribers(
 ) -> dict[str, Any]:
     if not subscriber_id:
         raise bad_request("no IDs given")
-    await db.execute("delete-subscribers", subscriber_id, [])
+    await subscriber_repo.delete_subscribers(subscriber_id, [])
     return ok(True)
 
 
@@ -282,7 +297,7 @@ async def delete_subscribers(
     "/api/subscribers/{sub_id}/blocklist", dependencies=[auth.require("subscribers:manage")]
 )
 async def blocklist_subscriber(sub_id: int) -> dict[str, Any]:
-    await db.execute("blocklist-subscribers", [sub_id])
+    await subscriber_repo.blocklist_subscribers([sub_id])
     return ok(True)
 
 
@@ -292,7 +307,7 @@ async def blocklist_subscribers(
 ) -> dict[str, Any]:
     if not subscriber_id:
         raise bad_request("no IDs given")
-    await db.execute("blocklist-subscribers", subscriber_id)
+    await subscriber_repo.blocklist_subscribers(subscriber_id)
     return ok(True)
 
 
@@ -322,14 +337,14 @@ class ListsPayload(BaseModel):
 
 async def _manage_lists_by_ids(payload: ListsPayload) -> None:
     if payload.action == "add":
-        await db.execute(
-            "add-subscribers-to-lists", payload.ids, payload.target_list_ids, payload.status
+        await subscriber_repo.add_subscribers_to_lists(
+            payload.ids, payload.target_list_ids, payload.status
         )
     elif payload.action == "remove":
-        await db.execute("delete-subscriptions", payload.ids, payload.target_list_ids)
+        await subscriber_repo.delete_subscriptions(payload.ids, payload.target_list_ids)
     elif payload.action == "unsubscribe":
-        await db.execute(
-            "unsubscribe-subscribers-from-lists", payload.ids, payload.target_list_ids, []
+        await subscriber_repo.unsubscribe_subscribers_from_lists(
+            payload.ids, payload.target_list_ids, []
         )
     else:
         raise bad_request("invalid action")
@@ -366,16 +381,14 @@ async def update_subscriber(
     lists = _scope_lists(user, payload.lists, "manage") if payload.lists else []
     permitted, all_ok = auth.permitted_list_ids(user, "manage")
     sub_status = "confirmed" if payload.preconfirm_subscriptions else "unconfirmed"
-    await db.execute(
-        "update-subscriber-with-lists",
-        sub_id, email, payload.name.strip(), payload.status,
-        orjson.dumps(payload.attribs).decode() if payload.attribs is not None else "",
+    await subscriber_repo.update_subscriber_with_lists(
+        sub_id, email, payload.name.strip(), payload.status, payload.attribs,
         lists, [], sub_status,
         True,  # delete subscriptions not in the list
         [] if all_ok else (permitted or [-1]),
         False,
     )
-    sub = await db.fetchrow("get-subscriber", sub_id, "", "")
+    sub = await subscriber_repo.get_subscriber(sub_id)
     if not sub:
         raise not_found("subscriber not found")
     await _attach_lists([sub])
@@ -403,7 +416,7 @@ async def patch_subscriber(
     actually sent are changed. `lists` being omitted (None) leaves existing
     subscriptions alone; sending [] clears them.
     """
-    cur = await db.fetchrow("get-subscriber", sub_id, None, "")
+    cur = await subscriber_repo.get_subscriber(sub_id)
     if not cur:
         raise not_found("subscriber not found")
 
@@ -419,23 +432,21 @@ async def patch_subscriber(
 
     if payload.lists is None:
         # Keep current subscriptions: pass them through and don't prune.
-        rows = await db.fetch("get-subscriber-lists", sub_id, None, [], [], "", "")
+        rows = await subscriber_repo.get_subscriber_lists(sub_id=sub_id)
         lists = [r["id"] for r in rows]
         delete_missing = False
     else:
         lists = _scope_lists(user, payload.lists, "manage")
         delete_missing = True
 
-    await db.execute(
-        "update-subscriber-with-lists",
-        sub_id, email, name, status,
-        orjson.dumps(attribs).decode(),
+    await subscriber_repo.update_subscriber_with_lists(
+        sub_id, email, name, status, attribs,
         lists, [], sub_status,
         delete_missing,
         [] if all_ok else (permitted or [-1]),
         False,
     )
-    sub = await db.fetchrow("get-subscriber", sub_id, None, "")
+    sub = await subscriber_repo.get_subscriber(sub_id)
     if not sub:
         raise not_found("subscriber not found")
     await _attach_lists([sub])
