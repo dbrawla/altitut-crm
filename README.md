@@ -10,6 +10,36 @@ admin UI was rebranded and redesigned to the Altitut identity.
 
 ---
 
+## Team & contributions
+
+Built by a three-person team for [Altitut](https://altitut.ai):
+
+| Who | Role |
+| --- | ---- |
+| **Desiree Bishnoi** ([@dbrawla](https://github.com/dbrawla)) | Team lead. Altitut rebrand; admin-UI bug fixes; the **Postgres → Firestore data-layer migration** (see below). |
+| **Merlin** ([@Merlin-2-5](https://github.com/Merlin-2-5)) | Python/FastAPI port of the Go backend, Vue 3 frontend, campaign send engine, headless E2E suite. |
+| **Hongyang** | UI/UX design. |
+
+Lu Sun and An Yan also contributed newsletter branding/templates and fixes on the Altitut side.
+
+### Postgres → Firestore migration (in progress)
+
+The data layer is moving from PostgreSQL to Firestore behind a **repository abstraction**
+(`backend/app/repos/`), so routers talk to repos rather than SQL. Work done so far:
+
+- Repos for **media, settings, sessions, roles, users, lists and subscribers**, wired into
+  the auth, users, lists, media and subscriber routers. The subscriber repo (CRUD, list
+  membership, **distributed counters** for high-write counts) is the largest.
+- Password hashing moved off Postgres `pgcrypto` to **bcrypt** (`backend/app/passwords.py`).
+- One-off **migration scripts** per domain in `backend/scripts/migrate_*_to_firestore.py`.
+- Unit tests for the manager layer (`backend/test_manager.py`).
+
+Campaigns, templates and bounces are still on Postgres, so the stack below is a hybrid.
+Firestore needs a service-account key (`backend/firebase-credentials.json`, gitignored —
+never commit it).
+
+---
+
 ## Stack
 
 | Layer      | Tech |
