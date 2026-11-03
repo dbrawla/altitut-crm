@@ -13,7 +13,8 @@ admin UI was rebranded and redesigned to the Altitut identity.
 - Python/FastAPI backend (async SQLAlchemy, Pydantic v2) serving a Vue 3 + TypeScript admin UI.
 - Incremental **Postgres → Firestore migration** behind a repository layer with per-domain
   feature flags ([details](#postgres--firestore-migration-in-progress)).
-- Headless **Playwright E2E suite** and backend pytest/ruff/mypy checks.
+- Quality gates all passing: backend `pytest` (21 tests), `ruff` and `mypy --strict`; frontend
+  ESLint and `vue-tsc`; and a 28-spec headless **Playwright E2E suite**.
 - One-command local run with Docker Compose.
 
 Based on [listmonk](https://github.com/knadh/listmonk) by Kailash Nadh and contributors
@@ -29,7 +30,7 @@ The rebranded admin UI (Vue 3 + Oruga/Bulma). All data shown is fake demo data.
 | --- | --- |
 | ![Sign in](screenshots/login.png) | ![Dashboard](screenshots/dashboard.png) |
 | ![Subscribers](screenshots/subscribers.png) | ![Lists](screenshots/lists.png) |
-| ![Campaigns](screenshots/campaigns.png) | ![Campaign editor](screenshots/campaign-editor.png) |
+| ![Campaigns](screenshots/campaigns.png) | ![Templates](screenshots/templates.png) |
 
 ---
 
@@ -189,6 +190,11 @@ install commands.
 
 ---
 
-## License
+## Credits & license
 
-Inherited from listmonk: **AGPL v3** (see `LICENSE`).
+This project is a fork of [listmonk](https://github.com/knadh/listmonk) by Kailash Nadh and
+its contributors; the original Go source is kept in the tree for reference. It inherits
+listmonk's **AGPL v3** license (see `LICENSE`).
+
+The Altitut re-platforming (FastAPI backend, Vue 3 frontend, Firestore migration, rebrand)
+was done by the team listed under [Team & contributions](#team--contributions).
