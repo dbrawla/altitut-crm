@@ -12,8 +12,8 @@
       </div>
       <div class="level-right">
         <o-button @click="router.push('/admin/campaigns')">Back</o-button>
-        <o-button class="ml-2" :disabled="!id" @click="openTest">Send test</o-button>
-        <o-button class="ml-2" :disabled="!id" @click="preview">Preview</o-button>
+        <o-button class="ml-2" :disabled="!id || !campaign" @click="openTest">Send test</o-button>
+        <o-button class="ml-2" :disabled="!id || !campaign" @click="preview">Preview</o-button>
         <o-button class="ml-2" variant="primary" :disabled="saving" @click="save">
           {{ saving ? 'Saving…' : 'Save' }}
         </o-button>
@@ -111,7 +111,7 @@
           </o-field>
 
           <o-field label="Tags">
-            <o-taginput v-model="form.tags" allow-new />
+            <ListInput v-model="form.tags" placeholder="newsletter, promo" />
           </o-field>
 
           <o-field label="Send at (optional)">
@@ -147,7 +147,7 @@
         <header class="modal-card-head"><p class="modal-card-title">Send a test</p></header>
         <section class="modal-card-body">
           <o-field label="Recipient emails" message="Must already exist as subscribers.">
-            <o-taginput v-model="testEmails" allow-new />
+            <ListInput v-model="testEmails" placeholder="you@example.com, other@example.com" />
           </o-field>
         </section>
         <footer class="modal-card-foot is-justify-content-flex-end">
@@ -163,6 +163,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import ListInput from '@/components/ListInput.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { campaigns as api, lists as listsApi, templates as tplApi, server } from '@/api'
 import type { Campaign, List, Template, ContentType, CampaignStatus } from '@/types'

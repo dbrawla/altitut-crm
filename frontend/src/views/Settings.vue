@@ -29,7 +29,7 @@
           <o-input v-model="s['app.from_email']" />
         </o-field>
         <o-field label="Admin notification emails">
-          <o-taginput v-model="s['app.notify_emails']" allow-new />
+          <ListInput v-model="s['app.notify_emails']" placeholder="admin@example.com" />
         </o-field>
         <o-field label="Language">
           <o-select v-model="s['app.lang']">
@@ -155,10 +155,10 @@
           <o-checkbox v-model="s['privacy.record_optin_ip']">Record opt-in IP addresses</o-checkbox>
         </o-field>
         <o-field label="Domain blocklist" message="Reject public signups from these domains.">
-          <o-taginput v-model="s['privacy.domain_blocklist']" allow-new />
+          <ListInput v-model="s['privacy.domain_blocklist']" placeholder="spam.com, bad.net" />
         </o-field>
         <o-field label="Domain allowlist" message="If set, only these domains may sign up.">
-          <o-taginput v-model="s['privacy.domain_allowlist']" allow-new />
+          <ListInput v-model="s['privacy.domain_allowlist']" placeholder="example.com" />
         </o-field>
       </o-tab-item>
 
@@ -200,7 +200,7 @@
         </template>
 
         <o-field label="Trusted URLs" class="mt-5" message="Allowed CORS origins and redirect targets.">
-          <o-taginput v-model="s['security.trusted_urls']" allow-new />
+          <ListInput v-model="s['security.trusted_urls']" placeholder="https://example.com" />
         </o-field>
       </o-tab-item>
 
@@ -270,7 +270,7 @@
           The S3 provider is configured here but this build only implements filesystem uploads.
         </o-notification>
         <o-field label="Allowed extensions">
-          <o-taginput v-model="s['upload.extensions']" allow-new />
+          <ListInput v-model="s['upload.extensions']" placeholder="jpg, png, pdf" />
         </o-field>
         <o-field label="Max file size (KB)">
           <o-input v-model.number="s['upload.max_file_size']" type="number" min="1" />
@@ -315,6 +315,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import ListInput from '@/components/ListInput.vue'
 import { settings as api, server } from '@/api'
 import type { Settings } from '@/types'
 
