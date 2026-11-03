@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from app import auth, settings, tmptokens
 from app.config import env
 from app.passwords import hash_password, verify_password
-from app.repos import user_repo
+from app.repos import session_repo, user_repo
 from app.utils import bad_request, ok
 
 router = APIRouter(tags=["auth"])
@@ -73,7 +73,7 @@ async def login_twofa(
 ) -> dict[str, Any]:
     if not session_id:
         raise HTTPException(status_code=401, detail="not authenticated")
-    data = await auth.session_repo.get(session_id)
+    data = await session_repo.get(session_id)
     if not data or not data.get("pre_2fa"):
         raise HTTPException(status_code=401, detail="no pending 2FA login")
 

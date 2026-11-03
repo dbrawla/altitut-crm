@@ -19,9 +19,11 @@ same guarantee Postgres's UNIQUE(email) index did.
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any, Protocol
 
 from app import db
+from app.repos._util import doc_dict
 
 
 class UserRepo(Protocol):
@@ -51,7 +53,9 @@ class UserRepo(Protocol):
 
     async def update_user_login(self, user_id: int, avatar: str) -> None: ...
 
-    async def set_user_twofa(self, user_id: int, twofa_type: str, twofa_key: str | None) -> None: ...
+    async def set_user_twofa(
+        self, user_id: int, twofa_type: str, twofa_key: str | None
+    ) -> None: ...
 
 
 async def _attach_role_info(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -91,10 +95,11 @@ class PgUserRepo:
         return await db.fetch("get-api-tokens")
 
     async def _count_other_enabled_superadmins(self, exclude_ids: list[int]) -> int:
-        return await db.fetchval("count-other-enabled-superadmins", exclude_ids)
+        value = await db.fetchval("count-other-enabled-superadmins", exclude_ids)
+        return int(value)
 
     async def create_user(self, fields: dict[str, Any]) -> int:
-        return await db.fetchval(
+        value = await db.fetchval(
             "create-user",
             fields["username"],
             fields["password_login"],
@@ -106,11 +111,12 @@ class PgUserRepo:
             fields["list_role_id"],
             fields["status"],
         )
+        return int(value)
 
     async def update_user(self, user_id: int, fields: dict[str, Any]) -> bool:
-        if fields.get("user_role_id", 0) != 1 or fields.get("status", "") != "enabled":
-            if await self._count_other_enabled_superadmins([user_id]) == 0:
-                return False
+        demoting = fields.get("user_role_id", 0) != 1 or fields.get("status", "") != "enabled"
+        if demoting and await self._count_other_enabled_superadmins([user_id]) == 0:
+            return False
         await db.execute(
             "update-user",
             user_id,
@@ -175,7 +181,7 @@ class FirestoreUserRepo:
         import asyncio
 
         def _run() -> list[dict[str, Any]]:
-            rows = [d.to_dict() for d in self._db.collection(self._COLLECTION).stream()]
+            rows = [doc_dict(d) for d in self._db.collection(self._COLLECTION).stream()]
             rows.sort(key=lambda r: r.get("created_at") or "")
             return rows
 
@@ -214,7 +220,7 @@ class FirestoreUserRepo:
             )
             if not docs:
                 return None
-            row = docs[0].to_dict()
+            row = doc_dict(docs[0])
             return None if row.get("status") == "disabled" else row
 
         return await asyncio.to_thread(_run)
@@ -229,7 +235,10 @@ class FirestoreUserRepo:
                 .where("type", "==", "api")
                 .stream()
             )
-            return [{"username": d.to_dict()["username"], "password": d.to_dict().get("password")} for d in docs]
+            return [
+                {"username": doc_dict(d)["username"], "password": doc_dict(d).get("password")}
+                for d in docs
+            ]
 
         return await asyncio.to_thread(_run)
 
@@ -244,19 +253,19 @@ class FirestoreUserRepo:
                 .where("status", "==", "enabled")
                 .stream()
             )
-            return sum(1 for d in docs if d.to_dict()["id"] not in exclude_ids)
+            return sum(1 for d in docs if doc_dict(d)["id"] not in exclude_ids)
 
         return await asyncio.to_thread(_run)
 
     async def create_user(self, fields: dict[str, Any]) -> int:
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from firebase_admin.firestore import transactional
 
         email_lower = fields["email"].strip().lower()
         user_id = await self._next_id()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         doc = {
             "id": user_id,
             "username": fields["username"],
@@ -291,13 +300,13 @@ class FirestoreUserRepo:
 
     async def update_user(self, user_id: int, fields: dict[str, Any]) -> bool:
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from firebase_admin.firestore import transactional
 
-        if fields.get("user_role_id", 0) != 1 or fields.get("status", "") != "enabled":
-            if await self._count_other_enabled_superadmins([user_id]) == 0:
-                return False
+        demoting = fields.get("user_role_id", 0) != 1 or fields.get("status", "") != "enabled"
+        if demoting and await self._count_other_enabled_superadmins([user_id]) == 0:
+            return False
 
         ref = self._db.collection(self._COLLECTION).document(str(user_id))
         new_email_lower = fields["email"].strip().lower() if fields["email"] else ""
@@ -305,7 +314,7 @@ class FirestoreUserRepo:
         @transactional
         def _txn(transaction: Any) -> None:
             cur = ref.get(transaction=transaction).to_dict() or {}
-            update: dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
+            update: dict[str, Any] = {"updated_at": datetime.now(UTC).isoformat()}
             if fields["username"]:
                 update["username"] = fields["username"]
             update["password_login"] = fields["password_login"]
@@ -391,10 +400,10 @@ class FirestoreUserRepo:
 
     async def update_user_login(self, user_id: int, avatar: str) -> None:
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         def _run() -> None:
-            update: dict[str, Any] = {"loggedin_at": datetime.now(timezone.utc).isoformat()}
+            update: dict[str, Any] = {"loggedin_at": datetime.now(UTC).isoformat()}
             if avatar:
                 update["avatar"] = avatar
             self._db.collection(self._COLLECTION).document(str(user_id)).set(update, merge=True)
@@ -403,14 +412,14 @@ class FirestoreUserRepo:
 
     async def set_user_twofa(self, user_id: int, twofa_type: str, twofa_key: str | None) -> None:
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         def _run() -> None:
             self._db.collection(self._COLLECTION).document(str(user_id)).set(
                 {
                     "twofa_type": twofa_type,
                     "twofa_key": twofa_key,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
                 },
                 merge=True,
             )

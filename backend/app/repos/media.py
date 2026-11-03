@@ -5,9 +5,11 @@ implementations behind one interface. See the migration plan: Phase 0
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any, Protocol
 
 from app import db
+from app.repos._util import doc_dict
 
 
 class MediaRepo(Protocol):
@@ -61,7 +63,10 @@ class PgMediaRepo:
         provider: str,
         meta: dict[str, Any],
     ) -> int:
-        return await db.fetchval("insert-media", uid, filename, thumb, content_type, provider, meta)
+        value = await db.fetchval(
+            "insert-media", uid, filename, thumb, content_type, provider, meta
+        )
+        return int(value)
 
     async def delete(self, media_id: int) -> dict[str, Any] | None:
         row = await db.fetchrow("get-media", media_id, "", "")
@@ -114,7 +119,7 @@ class FirestoreMediaRepo:
 
         def _run() -> tuple[list[dict[str, Any]], int]:
             col = self._db.collection(self._COLLECTION).where("provider", "==", provider)
-            rows = [d.to_dict() for d in col.stream()]
+            rows = [doc_dict(d) for d in col.stream()]
             if search:
                 needle = search.lower()
                 rows = [r for r in rows if needle in (r.get("filename") or "").lower()]
@@ -143,7 +148,7 @@ class FirestoreMediaRepo:
         meta: dict[str, Any],
     ) -> int:
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         media_id = await self._next_id()
         row = {
@@ -154,7 +159,7 @@ class FirestoreMediaRepo:
             "content_type": content_type,
             "provider": provider,
             "meta": meta,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
         def _run() -> None:

@@ -103,5 +103,14 @@ strict = true
 # These ship no type information (no py.typed, no stubs on PyPI). Untyped at the
 # boundary is the honest state; everything on our side of it is still checked.
 [[tool.mypy.overrides]]
-module = ["asyncpg.*", "aiofiles.*", "aiosmtplib.*", "qrcode.*", "markdown.*", "slugify.*"]
+module = [
+    "asyncpg.*", "aiofiles.*", "aiosmtplib.*", "qrcode.*", "markdown.*", "slugify.*",
+    "firebase_admin.*",
+]
 ignore_missing_imports = true
+
+# Firestore's `@transactional` decorator is untyped, which makes every decorated
+# `_txn` function "untyped" under --strict. Scoped to the repos that use it.
+[[tool.mypy.overrides]]
+module = ["app.repos.*"]
+disallow_untyped_decorators = false

@@ -25,10 +25,12 @@ in-memory over that bounded result - reasonable at list-table volumes
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 from typing import Any, Protocol
 
 from app import db
 from app.config import env
+from app.repos._util import doc_dict, order_key
 
 
 async def _firestore_counter_stats(list_id: int) -> tuple[dict[str, int], int]:
@@ -120,9 +122,7 @@ class ListRepo(Protocol):
 def _matches(row: dict[str, Any], search: str, tags: list[str]) -> bool:
     if search and search.lower() not in (row.get("name") or "").lower():
         return False
-    if tags and not set(tags).issubset(set(row.get("tags") or [])):
-        return False
-    return True
+    return not tags or set(tags).issubset(set(row.get("tags") or []))
 
 
 class PgListRepo:
@@ -192,9 +192,10 @@ class PgListRepo:
     ) -> int:
         import uuid as uuidlib
 
-        return await db.fetchval(
+        value = await db.fetchval(
             "create-list", str(uuidlib.uuid4()), name, type_, optin, status, tags, description
         )
+        return int(value)
 
     async def update_list(
         self,
@@ -253,14 +254,14 @@ class FirestoreListRepo:
         import asyncio
 
         def _run() -> list[dict[str, Any]]:
-            q = self._db.collection(self._COLLECTION)
+            q: Any = self._db.collection(self._COLLECTION)
             if list_type:
                 q = q.where("type", "==", list_type)
             if optin:
                 q = q.where("optin", "==", optin)
             if status:
                 q = q.where("status", "==", status)
-            return [d.to_dict() for d in q.stream()]
+            return [doc_dict(d) for d in q.stream()]
 
         return await asyncio.to_thread(_run)
 
@@ -286,7 +287,10 @@ class FirestoreListRepo:
             r["subscriber_statuses"] = statuses
             r["subscriber_count"] = total
         reverse = order.upper() == "DESC"
-        rows.sort(key=lambda r: r.get(order_by) if r.get(order_by) is not None else "", reverse=reverse)
+        rows.sort(
+            key=order_key(order_by),
+            reverse=reverse,
+        )
         total = len(rows)
         return rows[offset : offset + limit] if limit else rows[offset:], total
 
@@ -332,10 +336,10 @@ class FirestoreListRepo:
     ) -> int:
         import asyncio
         import uuid as uuidlib
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         list_id = await self._next_id()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         doc = {
             "id": list_id,
             "uuid": str(uuidlib.uuid4()),
@@ -366,14 +370,13 @@ class FirestoreListRepo:
         description: str,
     ) -> None:
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         def _run() -> None:
             ref = self._db.collection(self._COLLECTION).document(str(list_id))
-            cur = ref.get().to_dict() or {}
             update: dict[str, Any] = {
                 "tags": tags,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             }
             if name:
                 update["name"] = name

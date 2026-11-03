@@ -13,6 +13,7 @@ regardless of which code path reads them.
 from __future__ import annotations
 
 import secrets
+from datetime import UTC
 from typing import Any, Protocol
 
 from app import db
@@ -77,10 +78,10 @@ class FirestoreSessionRepo:
 
     async def create(self, user_id: int, extra: dict[str, Any] | None = None) -> str:
         import asyncio
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         sid = secrets.token_urlsafe(32)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         doc = {
             "user_id": user_id,
             **(extra or {}),
@@ -96,7 +97,7 @@ class FirestoreSessionRepo:
 
     async def get(self, sid: str) -> dict[str, Any] | None:
         import asyncio
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         def _run() -> dict[str, Any] | None:
             snap = self._db.collection(self._COLLECTION).document(sid).get()
@@ -106,7 +107,7 @@ class FirestoreSessionRepo:
             created_at = doc.get("created_at")
             if created_at is None:
                 return None
-            if datetime.now(timezone.utc) - created_at > timedelta(seconds=env.session_max_age):
+            if datetime.now(UTC) - created_at > timedelta(seconds=env.session_max_age):
                 return None
             return {k: v for k, v in doc.items() if k not in ("created_at", "expire_at")}
 

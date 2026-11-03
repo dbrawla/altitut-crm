@@ -17,9 +17,11 @@ that lookup to wherever Lists lives once Phase 4 lands.
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any, Protocol
 
 from app import db
+from app.repos._util import doc_dict
 
 
 class RoleRepo(Protocol):
@@ -53,7 +55,8 @@ class PgRoleRepo:
         self, name: str, role_type: str, permissions: list[str]
     ) -> dict[str, Any]:
         row = await db.fetchrow("create-role", name, role_type, permissions)
-        assert row
+        if row is None:
+            raise RuntimeError("create-role returned no row")
         return row
 
     async def update_role(
@@ -113,7 +116,7 @@ class FirestoreRoleRepo:
         def _run() -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]]]:
             col = self._db.collection(self._COLLECTION)
             q = col.where("type", "==", role_type).where("parent_id", "==", None)
-            top = [d.to_dict() for d in q.stream()]
+            top = [doc_dict(d) for d in q.stream()]
             if role_id:
                 top = [r for r in top if r.get("id") == role_id]
             top.sort(key=lambda r: r.get("created_at") or "")
@@ -121,7 +124,7 @@ class FirestoreRoleRepo:
             children_by_parent: dict[int, list[dict[str, Any]]] = {}
             for parent in top:
                 kids = [
-                    d.to_dict()
+                    doc_dict(d)
                     for d in col.where("parent_id", "==", parent["id"]).stream()
                 ]
                 if kids:
@@ -154,10 +157,10 @@ class FirestoreRoleRepo:
         self, name: str, role_type: str, permissions: list[str]
     ) -> dict[str, Any]:
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         role_id = await self._next_id()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         doc = {
             "id": role_id,
             "name": name,
@@ -179,7 +182,7 @@ class FirestoreRoleRepo:
         self, role_id: int, name: str, permissions: list[str]
     ) -> dict[str, Any] | None:
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         def _run() -> dict[str, Any] | None:
             ref = self._db.collection(self._COLLECTION).document(str(role_id))
@@ -189,10 +192,10 @@ class FirestoreRoleRepo:
             update = {
                 "name": name,
                 "permissions": permissions,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             }
             ref.set(update, merge=True)
-            return {**snap.to_dict(), **update}
+            return {**doc_dict(snap), **update}
 
         return await asyncio.to_thread(_run)
 
@@ -217,7 +220,7 @@ class FirestoreRoleRepo:
         def _run() -> None:
             col = self._db.collection(self._COLLECTION)
             existing = {
-                d.to_dict()["list_id"]: d.reference
+                doc_dict(d)["list_id"]: d.reference
                 for d in col.where("parent_id", "==", role_id).stream()
             }
             batch = self._db.batch()
