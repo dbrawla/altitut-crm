@@ -1,7 +1,7 @@
 <template>
   <div class="login-page">
     <div class="login-card">
-      <div class="login-logo"><img src="../assets/logo.svg" alt="Altitut" style="height: 48px;" /></div>
+      <div class="login-logo"><span class="login-logo-badge"><img src="../assets/logo.svg" alt="Altitut" /></span></div>
       <h1 class="login-title">Sign in</h1>
       <div class="alert alert-error" v-if="error">{{ error }}</div>
       <form @submit.prevent="handleLogin">
@@ -74,8 +74,22 @@ async function handleLogin() {
   font-size: 24px;
   font-weight: 700;
   color: var(--color-primary);
-  margin-bottom: 8px;
+  margin-bottom: 20px;
   text-align: center;
+}
+
+/* The logo asset is white-on-transparent, so it needs a brand-colored backing
+   on the white card (the sidebar gets this from its teal background). */
+.login-logo-badge {
+  display: inline-flex;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--color-primary);
+}
+
+.login-logo-badge img {
+  height: 40px;
+  width: 40px;
 }
 
 .login-title {
