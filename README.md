@@ -10,6 +10,19 @@ admin UI was rebranded and redesigned to the Altitut identity.
 
 ---
 
+## Screenshots
+
+The rebranded admin UI (Vue 3 + Oruga/Bulma). All data shown is fake demo data.
+
+| | |
+| --- | --- |
+| ![Dashboard](screenshots/dashboard.png) | ![Subscribers](screenshots/subscribers.png) |
+| ![Lists](screenshots/lists.png) | ![Campaigns](screenshots/campaigns.png) |
+
+![Campaign editor](screenshots/campaign-editor.png)
+
+---
+
 ## Team & contributions
 
 Built by a three-person team for [Altitut](https://altitut.ai):
