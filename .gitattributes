@@ -1,3 +1,15 @@
-frontend/* linguist-vendored
+# GitHub language stats (linguist). The original listmonk Go source and its
+# static assets are kept for reference only; the live app is backend/ (Python)
+# plus frontend/ (Vue 3 + TypeScript), so don't let the legacy code define the repo.
+*.go linguist-vendored
+cmd/** linguist-vendored
+internal/** linguist-vendored
+models/** linguist-vendored
+static/** linguist-vendored
+docs/** linguist-documentation
+frontend/cypress/** linguist-vendored
+frontend/public/** linguist-vendored
+frontend/fontello/** linguist-vendored
+
 VERSION export-subst
 * text=auto eol=lf

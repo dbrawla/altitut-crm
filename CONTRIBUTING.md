@@ -1,3 +1,5 @@
+> **Note:** This repository is a showcase fork of [listmonk](https://github.com/knadh/listmonk) (the Altitut CRM) and is not actively accepting contributions. The guidelines below are inherited from the upstream listmonk project and kept for reference.
+
 # 1. Contributing
 
 > [!IMPORTANT]
