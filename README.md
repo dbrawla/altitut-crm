@@ -8,6 +8,17 @@ admin UI was rebranded and redesigned to the Altitut identity.
 > The original Go source (`cmd/`, `internal/`, `models/`, `*.go`) is kept in the tree for
 > reference but is **not** the app that runs. The live app is `backend/` + `frontend/`.
 
+**Highlights**
+
+- Python/FastAPI backend (async SQLAlchemy, Pydantic v2) serving a Vue 3 + TypeScript admin UI.
+- Incremental **Postgres → Firestore migration** behind a repository layer with per-domain
+  feature flags ([details](#postgres--firestore-migration-in-progress)).
+- Headless **Playwright E2E suite** and backend pytest/ruff/mypy checks.
+- One-command local run with Docker Compose.
+
+Based on [listmonk](https://github.com/knadh/listmonk) by Kailash Nadh and contributors
+(AGPL-3.0) — see [Credits & license](#credits--license).
+
 ---
 
 ## Screenshots
@@ -16,10 +27,9 @@ The rebranded admin UI (Vue 3 + Oruga/Bulma). All data shown is fake demo data.
 
 | | |
 | --- | --- |
-| ![Dashboard](screenshots/dashboard.png) | ![Subscribers](screenshots/subscribers.png) |
-| ![Lists](screenshots/lists.png) | ![Campaigns](screenshots/campaigns.png) |
-
-![Campaign editor](screenshots/campaign-editor.png)
+| ![Sign in](screenshots/login.png) | ![Dashboard](screenshots/dashboard.png) |
+| ![Subscribers](screenshots/subscribers.png) | ![Lists](screenshots/lists.png) |
+| ![Campaigns](screenshots/campaigns.png) | ![Campaign editor](screenshots/campaign-editor.png) |
 
 ---
 
@@ -38,7 +48,19 @@ Lu Sun and An Yan also contributed newsletter branding/templates and fixes on th
 ### Postgres → Firestore migration (in progress)
 
 The data layer is moving from PostgreSQL to Firestore behind a **repository abstraction**
-(`backend/app/repos/`), so routers talk to repos rather than SQL. Work done so far:
+(`backend/app/repos/`), so routers talk to repos rather than SQL. Each domain has a Postgres
+and a Firestore implementation behind a common `Protocol`, selected per domain by a config
+flag (`repo_backend_*` in `backend/app/config.py`, default `postgres`). That makes cutover
+incremental and reversible: flipping a domain is a config change, not a router rewrite.
+
+```mermaid
+flowchart LR
+    R[FastAPI routers] --> C["repos/__init__.py<br/>(per-domain flag)"]
+    C -->|postgres| P[(PostgreSQL)]
+    C -->|firestore| F[(Firestore)]
+```
+
+Work done so far:
 
 - Repos for **media, settings, sessions, roles, users, lists and subscribers**, wired into
   the auth, users, lists, media and subscriber routers. The subscriber repo (CRUD, list
@@ -59,7 +81,7 @@ never commit it).
 | ---------- | ---- |
 | Backend    | Python 3.12, FastAPI, SQLAlchemy 2 (async) + asyncpg, Alembic, Pydantic v2, arq (background jobs), aiosmtplib |
 | Frontend   | Vue 3 (`<script setup>`), TypeScript, Vite, Pinia, vue-router 4, Oruga UI 0.13 + `@oruga-ui/theme-bulma` 0.9 on Bulma 1.0, Chart.js, CodeMirror 6, TinyMCE |
-| Database   | PostgreSQL 17 |
+| Database   | PostgreSQL 17 (default); Firestore for migrated domains |
 | Packaging  | Docker Compose (backend image also builds & serves the compiled frontend) |
 
 Brand: Altitut teal `#005A6A` (`hsl(189,100%,21%)`), Inter typeface, logo at
