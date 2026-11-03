@@ -48,7 +48,7 @@ source of truth for the DB schema and are useful when writing backend SQL.
 All four gates are green — keep them that way.
 
 - Backend: `ruff check app` and `mypy --strict app` both pass. `pytest` (`backend/test_*.py`),
-  20 tests. New env/config → `app/config.py`.
+  21 tests. New env/config → `app/config.py`.
   The prod image ships runtime deps only, so `scripts/backend-checks.ps1` installs the dev
   tools into the running container and runs all three.
   `[tool.ruff.lint].select` is pinned explicitly — ruff's implicit default set drifts between
@@ -57,7 +57,7 @@ All four gates are green — keep them that way.
   but every such site must still log or say why it doesn't.
 - Frontend: `npm run lint` (ESLint 9 flat config in `eslint.config.mjs`) and `npm run type-check`
   (vue-tsc), both clean.
-- E2E: `cd e2e && npm test` (Playwright, headless, needs the stack up), 27 tests. Add a spec
+- E2E: `cd e2e && npm test` (Playwright, headless, needs the stack up), 28 tests. Add a spec
   there for any UI regression — several past ones were invisible to unit tests and type-check.
 - Don't commit secrets. Default admin `listmonk`/`listmonk` is for local only. Set
   `SESSION_COOKIE_SECURE=true` behind TLS.
